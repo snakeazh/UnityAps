@@ -1,0 +1,22 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!244 &1
+VersionControlSettings:
+  m_ObjectHideFlags: 0
+  m_Mode: Visible Meta Files
+  m_CollabEditorSettings:
+    m_InProgressEnabled: 1
+  m_CollabSettings:
+    m_SelectedCollabType: 0
+    m_SelectedCollabServer: 0
+    m_CollabServerMode: 0
+    m_CollabServer: 
+    m_CollabUsername: 
+    m_CollabPassword: 
+    m_CollabHost: 
+    m_CollabPort: 0
+    m_CollabProjectId: 
+    m_CollabProjectName: 
+    m_CollabOrganization: 
+    m_CollabWorkspace: 
+  m_PackageManagerSettings: {}
