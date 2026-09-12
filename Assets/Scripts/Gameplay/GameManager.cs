@@ -21,18 +21,24 @@ namespace CoinFlip
         public bool IsBusy => coin != null && coin.IsFlipping;
 
         public event Action StatsChanged;
+        public event Action FlipStarted;
+        public event Action Landed;
         public event Action<CoinSide> FlipResolved;
 
         public void Bind(CoinController coinController)
         {
             if (coin != null)
             {
+                coin.FlipStarted -= OnFlipStarted;
+                coin.Landed -= OnLanded;
                 coin.FlipCompleted -= OnFlipCompleted;
             }
 
             coin = coinController;
             if (coin != null)
             {
+                coin.FlipStarted += OnFlipStarted;
+                coin.Landed += OnLanded;
                 coin.FlipCompleted += OnFlipCompleted;
             }
         }
@@ -46,6 +52,8 @@ namespace CoinFlip
         {
             if (coin != null)
             {
+                coin.FlipStarted -= OnFlipStarted;
+                coin.Landed -= OnLanded;
                 coin.FlipCompleted -= OnFlipCompleted;
             }
         }
@@ -68,6 +76,16 @@ namespace CoinFlip
             LastResult = null;
             SaveStats();
             StatsChanged?.Invoke();
+        }
+
+        void OnFlipStarted()
+        {
+            FlipStarted?.Invoke();
+        }
+
+        void OnLanded()
+        {
+            Landed?.Invoke();
         }
 
         void OnFlipCompleted(CoinSide side)
