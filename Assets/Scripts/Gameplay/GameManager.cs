@@ -18,6 +18,7 @@ namespace CoinFlip
         [SerializeField] CoinController coin;
         [SerializeField] GameFlowController flow;
 
+        GameServices _services;
         FlowStateMachine<MatchState, MatchTrigger> _match;
         bool _matchStarted;
 
@@ -28,12 +29,14 @@ namespace CoinFlip
         public bool IsBusy => coin != null && coin.IsFlipping;
 
         public MatchState MatchPhase => _match != null ? _match.Current : MatchState.Idle;
+        public GameServices Services => _services;
 
         /// <summary>
-        /// True only after startup reaches <see cref="GameFlowState.Playing"/> and match is Idle.
+        /// True only after startup reaches Playing, app is not paused, and match is Idle.
         /// </summary>
         public bool CanAcceptGameplayInput =>
             (flow == null || flow.CanAcceptGameplayInput) &&
+            (_services == null || !_services.IsPaused) &&
             !IsBusy &&
             (_match == null || _match.IsIn(MatchState.Idle));
 
@@ -61,10 +64,9 @@ namespace CoinFlip
             }
         }
 
-        public void BindFlow(GameFlowController flowController)
-        {
-            flow = flowController;
-        }
+        public void BindFlow(GameFlowController flowController) => flow = flowController;
+
+        public void BindServices(GameServices services) => _services = services;
 
         void Awake()
         {
@@ -107,7 +109,7 @@ namespace CoinFlip
 
         public void ResetStats()
         {
-            if (flow != null && !flow.CanAcceptGameplayInput)
+            if (!CanAcceptGameplayInput)
             {
                 return;
             }
@@ -158,54 +160,45 @@ namespace CoinFlip
 
         Flow WaitFlipCompleted(CancellationToken cancellationToken)
         {
-            var flow = FlowPool.RentVoid();
-            flow.AttachCancellation(cancellationToken);
-            if (flow.IsCompleted)
+            var wait = FlowPool.RentVoid();
+            wait.AttachCancellation(cancellationToken);
+            if (wait.IsCompleted)
             {
-                return flow;
+                return wait;
             }
 
             if (coin == null)
             {
-                flow.TrySetException(new InvalidOperationException("Coin missing."));
-                return flow;
+                wait.TrySetException(new InvalidOperationException("Coin missing."));
+                return wait;
             }
 
             void Handler(CoinSide _)
             {
                 coin.FlipCompleted -= Handler;
-                if (!flow.IsCompleted)
+                if (!wait.IsCompleted)
                 {
-                    flow.TrySetResult();
+                    wait.TrySetResult();
                 }
             }
 
             coin.FlipCompleted += Handler;
             cancellationToken.Register(() => coin.FlipCompleted -= Handler);
 
-            if (!coin.IsFlipping && !flow.IsCompleted)
+            if (!coin.IsFlipping && !wait.IsCompleted)
             {
                 coin.FlipCompleted -= Handler;
-                flow.TrySetResult();
+                wait.TrySetResult();
             }
 
-            return flow;
+            return wait;
         }
 
-        void OnMatchStateChanged(MatchState from, MatchState to)
-        {
-            MatchStateChanged?.Invoke(from, to);
-        }
+        void OnMatchStateChanged(MatchState from, MatchState to) => MatchStateChanged?.Invoke(from, to);
 
-        void OnFlipStarted()
-        {
-            FlipStarted?.Invoke();
-        }
+        void OnFlipStarted() => FlipStarted?.Invoke();
 
-        void OnLanded()
-        {
-            Landed?.Invoke();
-        }
+        void OnLanded() => Landed?.Invoke();
 
         void OnFlipCompleted(CoinSide side)
         {

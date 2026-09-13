@@ -6,7 +6,7 @@ using UnityEngine;
 namespace CoinFlip
 {
     /// <summary>
-    /// Startup controller built on <see cref="FlowStateMachine{TState,TTrigger}"/>.
+    /// Startup controller on <see cref="FlowStateMachine{TState,TTrigger}"/>.
     /// Pipeline (auto-advance): Booting → Splash → Entering → Playing.
     /// On enter fault: Failed → (auto) Playing (fail-open).
     /// </summary>
@@ -20,6 +20,7 @@ namespace CoinFlip
         GameBootstrap _bootstrap;
         SplashView _splash;
         GameManager _gameManager;
+        GameServices _services;
         FlowStateMachine<GameFlowState, GameFlowTrigger> _machine;
         Flow _startupFlow;
         CancellationTokenSource _lifetimeCts;
@@ -27,9 +28,10 @@ namespace CoinFlip
 
         public GameFlowState State => _machine != null ? _machine.Current : GameFlowState.None;
         public bool IsPlaying => State == GameFlowState.Playing;
-        public bool CanAcceptGameplayInput => IsPlaying;
+        public bool CanAcceptGameplayInput => IsPlaying && (_services == null || !_services.IsPaused);
 
         public GameManager GameManager => _gameManager;
+        public GameServices Services => _services;
 
         public event Action<GameFlowState, GameFlowState> StateChanged;
         public event Action StartupCompleted;
@@ -99,12 +101,28 @@ namespace CoinFlip
 
         Flow EnterBooting(FlowStateContext<GameFlowState, GameFlowTrigger> ctx)
         {
+            _services = GameServices.Ensure(gameObject);
+            ApplyTuning(_services.Tuning);
+
             _bootstrap = GetComponent<GameBootstrap>() ?? gameObject.AddComponent<GameBootstrap>();
-            var context = _bootstrap.Build();
+            var context = _bootstrap.Build(_services);
             _gameManager = context.Manager;
             _splash = context.Splash;
             _gameManager.BindFlow(this);
+            _gameManager.BindServices(_services);
             return Flow.Completed();
+        }
+
+        void ApplyTuning(GameTuning tuning)
+        {
+            if (tuning == null)
+            {
+                return;
+            }
+
+            splashMinSeconds = tuning.splashMinSeconds;
+            enterFadeSeconds = tuning.enterFadeSeconds;
+            allowTapToSkipSplash = tuning.allowTapToSkipSplash;
         }
 
         Flow EnterSplash(FlowStateContext<GameFlowState, GameFlowTrigger> ctx)
@@ -138,10 +156,7 @@ namespace CoinFlip
             }
         }
 
-        void HandleFaulted(Exception ex)
-        {
-            StartupFailed?.Invoke(ex);
-        }
+        void HandleFaulted(Exception ex) => StartupFailed?.Invoke(ex);
 
         void RaiseStartupCompletedOnce()
         {
@@ -173,6 +188,7 @@ namespace CoinFlip
     /// </summary>
     public sealed class GameBuildContext
     {
+        public GameServices Services;
         public GameManager Manager;
         public GameUI Ui;
         public CoinController Coin;

@@ -34,6 +34,13 @@
 ```
 Assets/
   Scenes/Main.unity
+  Resources/GameTuning.asset    # 默认调参（也可放 Settings/）
+  Scripts/Framework/            # 轻量 App 服务层
+    GameServices.cs             # 组合根（非 DI）
+    GameTuning.cs               # ScriptableObject 调参
+    GameSettings.cs             # 静音 / 震动开关（PlayerPrefs）
+    AudioService.cs             # SFX（尊重静音；空 clip 空操作）
+    AppLifecycle.cs             # 前后台暂停门闩
   Scripts/Flow/                 # 自研可等待 Promise 框架
     Flow.cs / Flow.T.cs         # Flow / Flow<T>（可继承）
     StateMachine/               # FlowStateMachine + Host
@@ -107,8 +114,22 @@ if (fsm.CanFire(GameFlowTrigger.ForcePlay))
 
 `Idle` —Flip→ `Flipping`（OnEnter：`coin.TryFlip` + 等待落地）—AutoAdvance→ `Idle`
 
-Busy 时 Ignore；Enter 故障 GoTo `Idle`。`CanAcceptGameplayInput` 同时要求启动态 Playing 与对局 Idle。
+Busy 时 Ignore；Enter 故障 GoTo `Idle`。`CanAcceptGameplayInput` 同时要求启动态 Playing、对局 Idle，且 App 未暂停。
+
+## App 服务层
+
+Booting 时 `GameServices.Ensure` 挂到根物体，经 `GameBuildContext` 分发给 Manager / Coin / UI：
+
+| 服务 | 职责 |
+|------|------|
+| `GameTuning` | Splash/淡出/抛币手感/奖励文案/SFX 槽；缺省走 `Resources/GameTuning` 或运行时默认 |
+| `GameSettings` | `Muted`、`HapticsEnabled`（预留）独立 PlayerPrefs |
+| `AudioService` | `PlayToss` / `PlayLand` / `PlayUiClick`；静音或空 clip 时 no-op |
+| `AppLifecycle` | `OnApplicationPause` / `Focus` → `IsPaused`；**不**改 `timeScale`，不取消飞行中抛币 |
+
+HUD「声音」按钮切换静音。暂停时只锁新输入（`TryFlip` 返回 false）。
 
 ## 说明
 
-不含 `Library/`。请使用与 `ProjectSettings/ProjectVersion.txt` 一致的编辑器版本。
+不含 `Library/`。请使用与 `ProjectSettings/ProjectVersion.txt` 一致的编辑器版本。  
+本环境无 Unity Editor，未做 Play Mode 实机验证；请在编辑器中点验：Booting 后 Services 非空、静音后无 SFX、切后台再回前台时抛币按钮锁定/恢复。
