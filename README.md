@@ -34,23 +34,80 @@
 ```
 Assets/
   Scenes/Main.unity
+  Scripts/Flow/                 # 自研可等待 Promise 框架
+    Flow.cs / Flow.T.cs         # Flow / Flow<T>（可继承）
+    StateMachine/               # FlowStateMachine + Host
+    Flow.WhenAll.cs             # WhenAll 2–16 路组合
+    FlowAwaiter.cs / FlowRunner.cs
+    Examples/SplashCoverFlow.cs # 继承 Flow 的示例
   Scripts/Gameplay/
-    GameFlowController.cs   # 启动流程：Booting → Splash → Entering → Playing
-    GameFlowState.cs
-    SplashView.cs           # 日记封面闪屏
-    GameBootstrap.cs        # 运行时搭建世界 / UI
-    CoinController.cs / GameManager.cs / CoinSparkBurst.cs
+    GameFlowController.cs       # 启动 FSM：Booting → … → Playing
+    GameManager.cs              # 对局 FSM：Idle ⇄ Flipping
+    MatchState.cs / GameFlowState.cs / SplashView.cs / GameBootstrap.cs
+    CoinController.cs / CoinSparkBurst.cs
   Scripts/UI/GameUI.cs
   Editor/CoinFlipEditorMenu.cs
 ```
 
+## Flow 框架（带返回值的可等待）
+
+行业常见写法（对齐 UniTask 一类库）：
+
+- 继承 `Flow` / `Flow<T>`，或实现 `IFlowAwaitable` / `IFlowAwaitable<T>`
+- `await flow`（在 async Task 中）或 `yield return flow.ToYieldInstruction()`（协程）
+- `Flow.WhenAll(...)` 支持 **2–16** 个带返回值的 Flow，结果为 ValueTuple；可选 `CancellationToken`
+- 工厂：`Delay` / `NextFrame` / `FromCoroutine` / `Create` / `FromResult`（均支持取消令牌）
+- 主线程：`TrySet*` 自动切回主线程完成；`await Flow.SwitchToMainThread()`；`FlowRunner.Ensure` 禁止非主线程创建
+- **取消**：`flow.AttachCancellation(ct)`，或工厂/`WhenAll` 传入 `CancellationToken`
+- **Forget**：`flow.Forget()` 观察结果；故障会 `Debug.LogException`，取消不报错
+- **未观察异常**：完成后若无人 `await`/`Forget`/`OnCompleted`，下一帧上报
+- **对象池**：工厂创建的 `Flow`/`Flow<T>` 在 `GetResult`/`Forget` 后回收（子类不入池）
+- **Awaiter**：实现 `ICriticalNotifyCompletion`（`UnsafeOnCompleted`）
+- **PlayerLoop 时机**：`await Flow.Yield(PlayerLoopTiming.EndOfFrame)`；`NextFrame(timing)`
+- **组合子**：`WhenAnyIndex` / typed `WhenAny`、`Timeout`、`Then` / `ContinueWith`
+- **async Flow**：可写 `async Flow` / `async Flow<T>`（`AsyncFlowMethodBuilder`）
+- **进度**：`Flow.CreateProgress<T>(...)`；`Create((flow, progress) => ...)`
+- **续体调度**：`FlowRunner.ContinuationScheduling` = `Post`（默认）/ `Run`（主线程内联，少拖一帧）
+- **StartRoutineAsFlow**：非主线程启动协程也可拿到可取消的 `Flow`
+- **单续体优化**：第二等待者走字段，第三起才分配 List
+- **编辑器双重异常栈**：`TrySetException` 附带设置点堆栈
+- **ValueFlow / ValueFlow&lt;T&gt;**：已完成结果的零分配 struct awaitable
+- **WhenAll 生成**：菜单 `CoinFlip/Flow/Regenerate WhenAll (2–16)`
+- **流程状态机**：`FlowStateMachine<TState,TTrigger>`，支持 `AutoAdvanceTo` 自动推进、`Permit` 触发边、Enter/Exit → `Flow`、错误策略与 Busy 门闩
+- **FSM 查询与等待**：`CanFire` / `TryFireAsync` / `IsIn` / `History` / `WaitUntilAsync` / `WaitUntilIdleAsync`
+- **FSM Host**：可选 `FlowStateMachineHost<TState,TTrigger>`（生命周期 CTS + Start 时自动 `StartAsync`）
+
+```csharp
+var fsm = FlowStateMachine.Create<GameFlowState, GameFlowTrigger>()
+    .Initial(GameFlowState.Booting)
+    .OnError(FlowStateErrorPolicy<GameFlowState>.GoTo(GameFlowState.Failed))
+    .State(GameFlowState.Booting, s => s.OnEnter(Boot).AutoAdvanceTo(GameFlowState.Splash))
+    .State(GameFlowState.Splash, s => s.OnEnter(Splash).AutoAdvanceTo(GameFlowState.Entering))
+    .State(GameFlowState.Entering, s => s.OnEnter(Enter).AutoAdvanceTo(GameFlowState.Playing))
+    .State(GameFlowState.Playing, s => s.OnEnter(_ => Flow.Completed()))
+    .State(GameFlowState.Failed, s => s.OnEnter(_ => Flow.Completed()).AutoAdvanceTo(GameFlowState.Playing))
+    .Build();
+
+await fsm.StartAsync(); // Booting → Splash → Entering → Playing
+if (fsm.CanFire(GameFlowTrigger.ForcePlay))
+    await fsm.TryFireAsync(GameFlowTrigger.ForcePlay);
+```
+
 ## 启动流程
 
-由 `GameFlowController` 驱动：
+由 `GameFlowController` + `FlowStateMachine` 驱动（自动推进）：
 
-`Booting` → `GameBootstrap.Build()` 搭世界 → `Splash`（日记封面，可点跳过）→ `Entering`（淡出）→ `Playing`
+`None` → `Booting` → `Splash`（`SplashCoverFlow`）→ `Entering` → `Playing`
 
-未进入 `Playing` 前，抛币与清零输入锁定。仅挂 `GameBootstrap` 的场景会自动补上 FlowController。
+状态 Enter 故障时进入 `Failed`，再自动 fail-open 到 `Playing`。未进入 `Playing` 前，抛币与清零输入锁定。
+
+## 对局流程（Match FSM）
+
+由 `GameManager` 内嵌 `FlowStateMachine<MatchState, MatchTrigger>`：
+
+`Idle` —Flip→ `Flipping`（OnEnter：`coin.TryFlip` + 等待落地）—AutoAdvance→ `Idle`
+
+Busy 时 Ignore；Enter 故障 GoTo `Idle`。`CanAcceptGameplayInput` 同时要求启动态 Playing 与对局 Idle。
 
 ## 说明
 
