@@ -72,41 +72,29 @@ Assets/
 - **编辑器双重异常栈**：`TrySetException` 附带设置点堆栈
 - **ValueFlow / ValueFlow&lt;T&gt;**：已完成结果的零分配 struct awaitable
 - **WhenAll 生成**：菜单 `CoinFlip/Flow/Regenerate WhenAll (2–16)`
+- **流程状态机**：`FlowStateMachine<TState,TTrigger>`，支持 `AutoAdvanceTo` 自动推进、`Permit` 触发边、Enter/Exit → `Flow`、错误策略与 Busy 门闩
 
 ```csharp
-// 继承后可直接等待
-public sealed class LoadConfigFlow : Flow<string>
-{
-    // 完成后调用 SetResult(json) / SetException(ex)
-}
+var fsm = FlowStateMachine.Create<GameFlowState, GameFlowTrigger>()
+    .Initial(GameFlowState.Booting)
+    .OnError(FlowStateErrorPolicy<GameFlowState>.GoTo(GameFlowState.Failed))
+    .State(GameFlowState.Booting, s => s.OnEnter(Boot).AutoAdvanceTo(GameFlowState.Splash))
+    .State(GameFlowState.Splash, s => s.OnEnter(Splash).AutoAdvanceTo(GameFlowState.Entering))
+    .State(GameFlowState.Entering, s => s.OnEnter(Enter).AutoAdvanceTo(GameFlowState.Playing))
+    .State(GameFlowState.Playing, s => s.OnEnter(_ => Flow.Completed()))
+    .State(GameFlowState.Failed, s => s.OnEnter(_ => Flow.Completed()).AutoAdvanceTo(GameFlowState.Playing))
+    .Build();
 
-using var cts = new CancellationTokenSource();
-var (a, b) = await Flow.WhenAll(flowA, flowB, cts.Token);
-yield return Flow.Delay(0.3f, cancellationToken: cts.Token).ToYieldInstruction();
-
-Flow.Delay(1f).Forget(); // fire-and-forget；故障会打日志
-await Flow.Yield(PlayerLoopTiming.EndOfFrame);
-await someFlow.Timeout(2f);
-var winner = await Flow.WhenAnyIndex(flowA, flowB);
-
-// async Flow 方法
-async Flow LoadThenPlay()
-{
-    await Flow.Delay(0.2f);
-}
-
-// 后台线程回到主线程后再碰 Unity API
-await Flow.SwitchToMainThread();
-transform.position = Vector3.zero;
+await fsm.StartAsync(); // Booting → Splash → Entering → Playing
 ```
 
 ## 启动流程
 
-由 `GameFlowController` 驱动（内部已用 Flow）：
+由 `GameFlowController` + `FlowStateMachine` 驱动（自动推进）：
 
-`Booting` → `Splash`（`SplashCoverFlow`）→ `Entering` → `Playing`
+`None` → `Booting` → `Splash`（`SplashCoverFlow`）→ `Entering` → `Playing`
 
-未进入 `Playing` 前，抛币与清零输入锁定。
+状态 Enter 故障时进入 `Failed`，再自动 fail-open 到 `Playing`。未进入 `Playing` 前，抛币与清零输入锁定。
 
 ## 说明
 

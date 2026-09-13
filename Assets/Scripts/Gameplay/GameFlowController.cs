@@ -1,13 +1,14 @@
 using System;
+using System.Threading;
 using CoinFlip.FlowFramework;
 using UnityEngine;
 
 namespace CoinFlip
 {
     /// <summary>
-    /// Startup flow controller: Booting → Splash → Entering → Playing.
-    /// Each phase is a <see cref="Flow"/> step with unified error handling.
-    /// Gameplay input stays locked until <see cref="GameFlowState.Playing"/>.
+    /// Startup controller built on <see cref="FlowStateMachine{TState,TTrigger}"/>.
+    /// Pipeline (auto-advance): Booting → Splash → Entering → Playing.
+    /// On enter fault: Failed → (auto) Playing (fail-open).
     /// </summary>
     [DefaultExecutionOrder(-200)]
     public sealed class GameFlowController : MonoBehaviour
@@ -19,9 +20,12 @@ namespace CoinFlip
         GameBootstrap _bootstrap;
         SplashView _splash;
         GameManager _gameManager;
+        FlowStateMachine<GameFlowState, GameFlowTrigger> _machine;
         Flow _startupFlow;
+        CancellationTokenSource _lifetimeCts;
+        bool _startupCompletedRaised;
 
-        public GameFlowState State { get; private set; } = GameFlowState.None;
+        public GameFlowState State => _machine != null ? _machine.Current : GameFlowState.None;
         public bool IsPlaying => State == GameFlowState.Playing;
         public bool CanAcceptGameplayInput => IsPlaying;
 
@@ -36,106 +40,130 @@ namespace CoinFlip
             Application.targetFrameRate = 60;
             Screen.sleepTimeout = SleepTimeout.NeverSleep;
             Input.multiTouchEnabled = false;
+            _lifetimeCts = new CancellationTokenSource();
+            _machine = BuildMachine();
+            _machine.StateChanged += HandleStateChanged;
+            _machine.Faulted += HandleFaulted;
         }
 
         void Start()
         {
-            _startupFlow = RunStartupAsync();
+            _startupFlow = _machine.StartAsync(_lifetimeCts.Token);
             _startupFlow.Forget();
         }
 
         void OnDestroy()
         {
-            _startupFlow?.TrySetCanceled();
-        }
-
-        /// <summary>
-        /// Entire boot pipeline as one awaitable Flow — every state step is Flow-backed
-        /// so faults surface through a single handler.
-        /// </summary>
-        async Flow RunStartupAsync()
-        {
             try
             {
-                await RunBootingAsync();
-                await RunSplashAsync();
-                await RunEnteringAsync();
-                await Flow.NextFrame();
-                SetState(GameFlowState.Playing);
-                StartupCompleted?.Invoke();
+                _lifetimeCts?.Cancel();
             }
-            catch (OperationCanceledException)
+            catch (ObjectDisposedException)
             {
-                // Tear-down / domain reload.
             }
-            catch (Exception ex)
+
+            _machine?.Cancel();
+            _startupFlow?.TrySetCanceled();
+            _lifetimeCts?.Dispose();
+            if (_machine != null)
             {
-                Debug.LogException(ex);
-                StartupFailed?.Invoke(ex);
-                SetState(GameFlowState.Failed);
-                // Fail-open so the player can still flip after a splash fault.
-                SetState(GameFlowState.Playing);
-                StartupCompleted?.Invoke();
+                _machine.StateChanged -= HandleStateChanged;
+                _machine.Faulted -= HandleFaulted;
             }
         }
 
-        async Flow RunBootingAsync()
+        FlowStateMachine<GameFlowState, GameFlowTrigger> BuildMachine()
         {
-            SetState(GameFlowState.Booting);
+            return FlowStateMachine.Create<GameFlowState, GameFlowTrigger>()
+                .Initial(GameFlowState.Booting)
+                .OnBusy(FlowStateBusyBehavior.Ignore)
+                .OnError(FlowStateErrorPolicy<GameFlowState>.GoTo(GameFlowState.Failed))
+                .State(GameFlowState.Booting, s => s
+                    .OnEnter(EnterBooting)
+                    .AutoAdvanceTo(GameFlowState.Splash))
+                .State(GameFlowState.Splash, s => s
+                    .OnEnter(EnterSplash)
+                    .AutoAdvanceTo(GameFlowState.Entering))
+                .State(GameFlowState.Entering, s => s
+                    .OnEnter(EnterEntering)
+                    .AutoAdvanceTo(GameFlowState.Playing))
+                .State(GameFlowState.Playing, s => s
+                    .OnEnter(_ => Flow.Completed()))
+                .State(GameFlowState.Failed, s => s
+                    .OnEnter(_ => Flow.Completed())
+                    .AutoAdvanceTo(GameFlowState.Playing))
+                .Permit(GameFlowState.Failed, GameFlowTrigger.Recover, GameFlowState.Playing)
+                .PermitAny(GameFlowTrigger.ForcePlay, GameFlowState.Playing)
+                .Build();
+        }
+
+        Flow EnterBooting(FlowStateContext<GameFlowState, GameFlowTrigger> ctx)
+        {
             _bootstrap = GetComponent<GameBootstrap>() ?? gameObject.AddComponent<GameBootstrap>();
             var context = _bootstrap.Build();
             _gameManager = context.Manager;
             _splash = context.Splash;
             _gameManager.BindFlow(this);
-            await Flow.Completed();
+            return Flow.Completed();
         }
 
-        async Flow RunSplashAsync()
+        Flow EnterSplash(FlowStateContext<GameFlowState, GameFlowTrigger> ctx)
         {
-            SetState(GameFlowState.Splash);
             if (_splash != null)
             {
-                await new SplashCoverFlow(_splash, splashMinSeconds, allowTapToSkipSplash);
+                return new SplashCoverFlow(_splash, splashMinSeconds, allowTapToSkipSplash);
             }
-            else
-            {
-                await Flow.Delay(splashMinSeconds);
-            }
+
+            return Flow.Delay(splashMinSeconds, cancellationToken: ctx.CancellationToken);
         }
 
-        async Flow RunEnteringAsync()
+        Flow EnterEntering(FlowStateContext<GameFlowState, GameFlowTrigger> ctx)
         {
-            SetState(GameFlowState.Entering);
             if (_splash != null)
             {
-                await Flow.FromCoroutine(_splash.Hide(enterFadeSeconds));
+                return Flow.FromCoroutine(
+                    _splash.Hide(enterFadeSeconds),
+                    ctx.CancellationToken);
+            }
+
+            return Flow.NextFrame(ctx.CancellationToken);
+        }
+
+        void HandleStateChanged(GameFlowState from, GameFlowState to)
+        {
+            StateChanged?.Invoke(from, to);
+            if (to == GameFlowState.Playing)
+            {
+                RaiseStartupCompletedOnce();
             }
         }
 
-        void SetState(GameFlowState next)
+        void HandleFaulted(Exception ex)
         {
-            if (State == next)
+            StartupFailed?.Invoke(ex);
+        }
+
+        void RaiseStartupCompletedOnce()
+        {
+            if (_startupCompletedRaised)
             {
                 return;
             }
 
-            var previous = State;
-            State = next;
-            StateChanged?.Invoke(previous, next);
-            Debug.Log($"[GameFlow] {previous} → {next}");
+            _startupCompletedRaised = true;
+            StartupCompleted?.Invoke();
         }
 
 #if UNITY_EDITOR
         [ContextMenu("Debug / Force Playing")]
         void DebugForcePlaying()
         {
-            _startupFlow?.TrySetCanceled();
             if (_splash != null)
             {
                 _splash.gameObject.SetActive(false);
             }
 
-            SetState(GameFlowState.Playing);
+            _machine.FireAsync(GameFlowTrigger.ForcePlay).Forget();
         }
 #endif
     }
