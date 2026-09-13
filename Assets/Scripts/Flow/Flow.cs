@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEngine;
 
 namespace CoinFlip.FlowFramework
@@ -14,12 +15,52 @@ namespace CoinFlip.FlowFramework
     {
         static int s_nextId = 1;
 
-        readonly int _id = s_nextId++;
+        int _id;
         readonly object _gate = new object();
         bool _completed;
+        bool _observed;
+        bool _fromPool;
+        bool _returnedToPool;
         Exception _exception;
         Action _continuation;
         readonly List<Action> _extraContinuations = new List<Action>(0);
+        CancellationTokenRegistration _cancelRegistration;
+
+        protected Flow()
+        {
+            _id = s_nextId++;
+        }
+
+        internal static Flow CreatePooled()
+        {
+            return new Flow { _fromPool = true };
+        }
+
+        internal bool IsPooledInstance => _fromPool;
+
+        internal void PrepareFromPool()
+        {
+            _id = s_nextId++;
+            _completed = false;
+            _observed = false;
+            _returnedToPool = false;
+            _exception = null;
+            _continuation = null;
+            _extraContinuations.Clear();
+            _cancelRegistration = default;
+        }
+
+        internal void ResetForPool()
+        {
+            DisposeCancellationRegistration();
+            _completed = false;
+            _observed = false;
+            // Keep _returnedToPool true while stored in the pool so a stale
+            // reference cannot return the same instance twice.
+            _exception = null;
+            _continuation = null;
+            _extraContinuations.Clear();
+        }
 
         public bool IsCompleted
         {
@@ -38,7 +79,7 @@ namespace CoinFlip.FlowFramework
             {
                 lock (_gate)
                 {
-                    return _completed && _exception != null;
+                    return _completed && _exception != null && _exception is not OperationCanceledException;
                 }
             }
         }
@@ -56,7 +97,11 @@ namespace CoinFlip.FlowFramework
 
         public int Id => _id;
 
-        public FlowAwaiter GetAwaiter() => new FlowAwaiter(this);
+        public FlowAwaiter GetAwaiter()
+        {
+            MarkObserved();
+            return new FlowAwaiter(this);
+        }
 
         public void OnCompleted(Action continuation)
         {
@@ -64,6 +109,8 @@ namespace CoinFlip.FlowFramework
             {
                 throw new ArgumentNullException(nameof(continuation));
             }
+
+            MarkObserved();
 
             var alreadyDone = false;
             lock (_gate)
@@ -84,13 +131,57 @@ namespace CoinFlip.FlowFramework
 
             if (alreadyDone)
             {
-                // Always marshal to main-thread pump.
                 FlowRunner.Post(continuation);
+            }
+        }
+
+        /// <summary>
+        /// Observe result without awaiting further. Faults are logged; instance may return to pool.
+        /// </summary>
+        public void Forget()
+        {
+            MarkObserved();
+            if (IsCompleted)
+            {
+                HandleForgetContinuation();
+                return;
+            }
+
+            OnCompleted(HandleForgetContinuation);
+        }
+
+        void HandleForgetContinuation()
+        {
+            Exception error;
+            lock (_gate)
+            {
+                error = _exception;
+            }
+
+            if (error != null && error is not OperationCanceledException)
+            {
+                Debug.LogException(error);
+            }
+
+            TryReturnToPool();
+        }
+
+        public void GetResultAsVoid()
+        {
+            MarkObserved();
+            try
+            {
+                ThrowIfFaulted();
+            }
+            finally
+            {
+                TryReturnToPool();
             }
         }
 
         public void ThrowIfFaulted()
         {
+            MarkObserved();
             Exception error;
             lock (_gate)
             {
@@ -103,25 +194,27 @@ namespace CoinFlip.FlowFramework
             }
         }
 
-        /// <summary>Complete successfully. Safe to call once; later calls are ignored.</summary>
-        protected void SetResult()
+        void MarkObserved()
         {
-            Complete(null);
+            lock (_gate)
+            {
+                _observed = true;
+            }
         }
+
+        /// <summary>Complete successfully. Safe to call once; later calls are ignored.</summary>
+        protected void SetResult() => Complete(null);
 
         /// <summary>Fail the flow. Safe to call once; later calls are ignored.</summary>
-        protected void SetException(Exception exception)
-        {
+        protected void SetException(Exception exception) =>
             Complete(exception ?? new Exception("Flow faulted with null exception."));
-        }
 
         /// <summary>Cancel via <see cref="OperationCanceledException"/>.</summary>
-        protected void SetCanceled()
-        {
-            Complete(new OperationCanceledException());
-        }
+        protected void SetCanceled() => Complete(new OperationCanceledException());
 
-        /// <summary>Public complete for factory-built flows that are not subclassed.</summary>
+        protected void SetCanceled(CancellationToken cancellationToken) =>
+            Complete(new OperationCanceledException(cancellationToken));
+
         public void TrySetResult() => Complete(null);
 
         public void TrySetException(Exception exception) =>
@@ -129,10 +222,37 @@ namespace CoinFlip.FlowFramework
 
         public void TrySetCanceled() => Complete(new OperationCanceledException());
 
+        public void TrySetCanceled(CancellationToken cancellationToken) =>
+            Complete(new OperationCanceledException(cancellationToken));
+
+        /// <summary>
+        /// When <paramref name="cancellationToken"/> fires, this flow becomes canceled.
+        /// </summary>
+        public Flow AttachCancellation(CancellationToken cancellationToken)
+        {
+            if (!cancellationToken.CanBeCanceled || IsCompleted)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    TrySetCanceled(cancellationToken);
+                }
+
+                return this;
+            }
+
+            DisposeCancellationRegistration();
+            _cancelRegistration = FlowCancellation.Attach(this, cancellationToken);
+            return this;
+        }
+
+        void DisposeCancellationRegistration()
+        {
+            _cancelRegistration.Dispose();
+            _cancelRegistration = default;
+        }
+
         void Complete(Exception exception)
         {
-            // Completion always runs on the Unity main thread so Unity API use in
-            // continuations / subclass overrides stays safe.
             if (!FlowRunner.IsMainThread)
             {
                 FlowRunner.Post(() => Complete(exception));
@@ -141,6 +261,7 @@ namespace CoinFlip.FlowFramework
 
             Action first = null;
             Action[] extras = null;
+            var reportUnobserved = false;
             lock (_gate)
             {
                 if (_completed)
@@ -157,7 +278,16 @@ namespace CoinFlip.FlowFramework
                     extras = _extraContinuations.ToArray();
                     _extraContinuations.Clear();
                 }
+
+                // Fault with nobody waiting yet → check next tick for unobserved exception.
+                reportUnobserved = exception != null
+                    && exception is not OperationCanceledException
+                    && first == null
+                    && extras == null
+                    && !_observed;
             }
+
+            DisposeCancellationRegistration();
 
             if (first != null)
             {
@@ -171,30 +301,72 @@ namespace CoinFlip.FlowFramework
                     FlowRunner.Post(extras[i]);
                 }
             }
+
+            if (reportUnobserved)
+            {
+                FlowRunner.Post(ReportUnobservedIfNeeded);
+            }
+        }
+
+        void ReportUnobservedIfNeeded()
+        {
+            Exception error = null;
+            lock (_gate)
+            {
+                if (!_observed && _exception != null && _exception is not OperationCanceledException)
+                {
+                    error = _exception;
+                    _observed = true;
+                }
+            }
+
+            if (error != null)
+            {
+                Debug.LogException(new Exception($"Unobserved Flow fault (Id={_id})", error));
+            }
+        }
+
+        void TryReturnToPool()
+        {
+            lock (_gate)
+            {
+                if (!_fromPool || !_completed || _returnedToPool)
+                {
+                    return;
+                }
+
+                _returnedToPool = true;
+            }
+
+            FlowPool.ReturnVoid(this);
         }
 
         public IEnumerator ToCoroutine()
         {
-            while (!_completed)
+            MarkObserved();
+            while (!IsCompleted)
             {
                 yield return null;
             }
 
-            ThrowIfFaulted();
+            GetResultAsVoid();
         }
 
-        public FlowYieldInstruction ToYieldInstruction() => new FlowYieldInstruction(this);
+        public FlowYieldInstruction ToYieldInstruction()
+        {
+            MarkObserved();
+            return new FlowYieldInstruction(this);
+        }
 
         #region Static factories
 
         public static Flow Completed()
         {
-            var flow = new Flow();
+            var flow = FlowPool.RentVoid();
             flow.TrySetResult();
             return flow;
         }
 
-        /// <summary>Create a flow and run a starter that completes it via TrySet*.</summary>
         public static Flow Create(Action<Flow> starter)
         {
             if (starter == null)
@@ -202,7 +374,7 @@ namespace CoinFlip.FlowFramework
                 throw new ArgumentNullException(nameof(starter));
             }
 
-            var flow = new Flow();
+            var flow = FlowPool.RentVoid();
             try
             {
                 starter(flow);
@@ -217,59 +389,108 @@ namespace CoinFlip.FlowFramework
 
         public static Flow FromException(Exception exception)
         {
-            var flow = new Flow();
+            var flow = FlowPool.RentVoid();
             flow.TrySetException(exception);
             return flow;
         }
 
-        public static Flow Delay(float seconds, bool ignoreTimeScale = true)
+        public static Flow Canceled(CancellationToken cancellationToken = default)
         {
-            var flow = new Flow();
-            FlowRunner.StartRoutine(DelayRoutine(flow, Mathf.Max(0f, seconds), ignoreTimeScale));
+            var flow = FlowPool.RentVoid();
+            flow.TrySetCanceled(cancellationToken);
             return flow;
         }
 
-        public static Flow NextFrame()
+        public static Flow Delay(
+            float seconds,
+            bool ignoreTimeScale = true,
+            CancellationToken cancellationToken = default)
         {
-            var flow = new Flow();
-            FlowRunner.StartRoutine(NextFrameRoutine(flow));
+            var flow = FlowPool.RentVoid();
+            flow.AttachCancellation(cancellationToken);
+            if (flow.IsCompleted)
+            {
+                return flow;
+            }
+
+            FlowRunner.StartRoutine(DelayRoutine(flow, Mathf.Max(0f, seconds), ignoreTimeScale, cancellationToken));
+            return flow;
+        }
+
+        public static Flow NextFrame(CancellationToken cancellationToken = default)
+        {
+            var flow = FlowPool.RentVoid();
+            flow.AttachCancellation(cancellationToken);
+            if (flow.IsCompleted)
+            {
+                return flow;
+            }
+
+            FlowRunner.StartRoutine(NextFrameRoutine(flow, cancellationToken));
             return flow;
         }
 
         /// <summary>Wrap a Unity coroutine as an awaitable Flow.</summary>
-        public static Flow FromCoroutine(IEnumerator routine)
+        public static Flow FromCoroutine(IEnumerator routine, CancellationToken cancellationToken = default)
         {
             if (routine == null)
             {
                 throw new ArgumentNullException(nameof(routine));
             }
 
-            var flow = new Flow();
-            FlowRunner.StartRoutine(WrapCoroutine(flow, routine));
+            var flow = FlowPool.RentVoid();
+            flow.AttachCancellation(cancellationToken);
+            if (flow.IsCompleted)
+            {
+                return flow;
+            }
+
+            FlowRunner.StartRoutine(WrapCoroutine(flow, routine, cancellationToken));
             return flow;
         }
 
-        public static Flow WhenAll(params Flow[] flows)
+        public static Flow WhenAll(params Flow[] flows) => WhenAll(default, flows);
+
+        public static Flow WhenAll(CancellationToken cancellationToken, params Flow[] flows)
         {
             if (flows == null || flows.Length == 0)
             {
-                return Completed();
+                return cancellationToken.IsCancellationRequested
+                    ? Canceled(cancellationToken)
+                    : Completed();
             }
 
-            var parent = new Flow();
+            var parent = FlowPool.RentVoid();
+            parent.AttachCancellation(cancellationToken);
+            if (parent.IsCompleted)
+            {
+                return parent;
+            }
+
             var remaining = flows.Length;
             for (var i = 0; i < flows.Length; i++)
             {
                 var child = flows[i] ?? Completed();
                 child.OnCompleted(() =>
                 {
+                    if (parent.IsCompleted)
+                    {
+                        return;
+                    }
+
                     if (child.IsFaulted)
                     {
                         parent.TrySetException(GetException(child));
                         return;
                     }
 
-                    if (System.Threading.Interlocked.Decrement(ref remaining) == 0)
+                    if (child.IsCanceled)
+                    {
+                        parent.TrySetCanceled();
+                        return;
+                    }
+
+                    if (Interlocked.Decrement(ref remaining) == 0)
                     {
                         parent.TrySetResult();
                     }
@@ -286,7 +507,7 @@ namespace CoinFlip.FlowFramework
                 return Completed();
             }
 
-            var parent = new Flow();
+            var parent = FlowPool.RentVoid();
             for (var i = 0; i < flows.Length; i++)
             {
                 var child = flows[i] ?? Completed();
@@ -300,6 +521,10 @@ namespace CoinFlip.FlowFramework
                     if (child.IsFaulted)
                     {
                         parent.TrySetException(GetException(child));
+                    }
+                    else if (child.IsCanceled)
+                    {
+                        parent.TrySetCanceled();
                     }
                     else
                     {
@@ -324,8 +549,18 @@ namespace CoinFlip.FlowFramework
             }
         }
 
-        static IEnumerator DelayRoutine(Flow flow, float seconds, bool ignoreTimeScale)
+        static IEnumerator DelayRoutine(
+            Flow flow,
+            float seconds,
+            bool ignoreTimeScale,
+            CancellationToken cancellationToken)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                flow.TrySetCanceled(cancellationToken);
+                yield break;
+            }
+
             if (seconds <= 0f)
             {
                 flow.TrySetResult();
@@ -334,27 +569,76 @@ namespace CoinFlip.FlowFramework
 
             if (ignoreTimeScale)
             {
-                yield return new WaitForSecondsRealtime(seconds);
+                var end = Time.realtimeSinceStartup + seconds;
+                while (Time.realtimeSinceStartup < end)
+                {
+                    if (cancellationToken.IsCancellationRequested || flow.IsCompleted)
+                    {
+                        if (!flow.IsCompleted)
+                        {
+                            flow.TrySetCanceled(cancellationToken);
+                        }
+
+                        yield break;
+                    }
+
+                    yield return null;
+                }
             }
             else
             {
-                yield return new WaitForSeconds(seconds);
+                var elapsed = 0f;
+                while (elapsed < seconds)
+                {
+                    if (cancellationToken.IsCancellationRequested || flow.IsCompleted)
+                    {
+                        if (!flow.IsCompleted)
+                        {
+                            flow.TrySetCanceled(cancellationToken);
+                        }
+
+                        yield break;
+                    }
+
+                    elapsed += Time.deltaTime;
+                    yield return null;
+                }
             }
 
-            flow.TrySetResult();
+            if (!flow.IsCompleted)
+            {
+                flow.TrySetResult();
+            }
         }
 
-        static IEnumerator NextFrameRoutine(Flow flow)
+        static IEnumerator NextFrameRoutine(Flow flow, CancellationToken cancellationToken)
         {
             yield return null;
-            flow.TrySetResult();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                flow.TrySetCanceled(cancellationToken);
+            }
+            else if (!flow.IsCompleted)
+            {
+                flow.TrySetResult();
+            }
         }
 
-        static IEnumerator WrapCoroutine(Flow flow, IEnumerator routine)
+        static IEnumerator WrapCoroutine(Flow flow, IEnumerator routine, CancellationToken cancellationToken)
         {
             Exception error = null;
             while (true)
             {
+                if (cancellationToken.IsCancellationRequested || flow.IsCompleted)
+                {
+                    if (!flow.IsCompleted)
+                    {
+                        flow.TrySetCanceled(cancellationToken);
+                    }
+
+                    yield break;
+                }
+
                 bool moved;
                 try
                 {
@@ -372,6 +656,11 @@ namespace CoinFlip.FlowFramework
                 }
 
                 yield return routine.Current;
+            }
+
+            if (flow.IsCompleted)
+            {
+                yield break;
             }
 
             if (error != null)

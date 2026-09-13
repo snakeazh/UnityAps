@@ -54,9 +54,14 @@ Assets/
 
 - 继承 `Flow` / `Flow<T>`，或实现 `IFlowAwaitable` / `IFlowAwaitable<T>`
 - `await flow`（在 async Task 中）或 `yield return flow.ToYieldInstruction()`（协程）
-- `Flow.WhenAll(...)` 支持 **2–16** 个带返回值的 Flow，结果为 ValueTuple
-- 工厂：`Delay` / `NextFrame` / `FromCoroutine` / `Create` / `FromResult`
+- `Flow.WhenAll(...)` 支持 **2–16** 个带返回值的 Flow，结果为 ValueTuple；可选 `CancellationToken`
+- 工厂：`Delay` / `NextFrame` / `FromCoroutine` / `Create` / `FromResult`（均支持取消令牌）
 - 主线程：`TrySet*` 自动切回主线程完成；`await Flow.SwitchToMainThread()`；`FlowRunner.Ensure` 禁止非主线程创建
+- **取消**：`flow.AttachCancellation(ct)`，或工厂/`WhenAll` 传入 `CancellationToken`
+- **Forget**：`flow.Forget()` 观察结果；故障会 `Debug.LogException`，取消不报错
+- **未观察异常**：完成后若无人 `await`/`Forget`/`OnCompleted`，下一帧上报
+- **对象池**：工厂创建的 `Flow`/`Flow<T>` 在 `GetResult`/`Forget` 后回收（子类不入池）
+- **Awaiter**：实现 `ICriticalNotifyCompletion`（`UnsafeOnCompleted`）
 
 ```csharp
 // 继承后可直接等待
@@ -65,8 +70,11 @@ public sealed class LoadConfigFlow : Flow<string>
     // 完成后调用 SetResult(json) / SetException(ex)
 }
 
-var (a, b) = await Flow.WhenAll(flowA, flowB);
-yield return Flow.Delay(0.3f).ToYieldInstruction();
+using var cts = new CancellationTokenSource();
+var (a, b) = await Flow.WhenAll(flowA, flowB, cts.Token);
+yield return Flow.Delay(0.3f, cancellationToken: cts.Token).ToYieldInstruction();
+
+Flow.Delay(1f).Forget(); // fire-and-forget；故障会打日志
 
 // 后台线程回到主线程后再碰 Unity API
 await Flow.SwitchToMainThread();
