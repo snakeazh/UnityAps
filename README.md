@@ -36,14 +36,15 @@ Assets/
   Scenes/Main.unity
   Scripts/Flow/                 # 自研可等待 Promise 框架
     Flow.cs / Flow.T.cs         # Flow / Flow<T>（可继承）
-    IFlowAwaitable.cs           # 外部可实现的可等待接口
+    StateMachine/               # FlowStateMachine + Host
     Flow.WhenAll.cs             # WhenAll 2–16 路组合
     FlowAwaiter.cs / FlowRunner.cs
     Examples/SplashCoverFlow.cs # 继承 Flow 的示例
   Scripts/Gameplay/
-    GameFlowController.cs       # 启动：Booting → Splash → Entering → Playing
-    GameFlowState.cs / SplashView.cs / GameBootstrap.cs
-    CoinController.cs / GameManager.cs / CoinSparkBurst.cs
+    GameFlowController.cs       # 启动 FSM：Booting → … → Playing
+    GameManager.cs              # 对局 FSM：Idle ⇄ Flipping
+    MatchState.cs / GameFlowState.cs / SplashView.cs / GameBootstrap.cs
+    CoinController.cs / CoinSparkBurst.cs
   Scripts/UI/GameUI.cs
   Editor/CoinFlipEditorMenu.cs
 ```
@@ -73,6 +74,8 @@ Assets/
 - **ValueFlow / ValueFlow&lt;T&gt;**：已完成结果的零分配 struct awaitable
 - **WhenAll 生成**：菜单 `CoinFlip/Flow/Regenerate WhenAll (2–16)`
 - **流程状态机**：`FlowStateMachine<TState,TTrigger>`，支持 `AutoAdvanceTo` 自动推进、`Permit` 触发边、Enter/Exit → `Flow`、错误策略与 Busy 门闩
+- **FSM 查询与等待**：`CanFire` / `TryFireAsync` / `IsIn` / `History` / `WaitUntilAsync` / `WaitUntilIdleAsync`
+- **FSM Host**：可选 `FlowStateMachineHost<TState,TTrigger>`（生命周期 CTS + Start 时自动 `StartAsync`）
 
 ```csharp
 var fsm = FlowStateMachine.Create<GameFlowState, GameFlowTrigger>()
@@ -86,6 +89,8 @@ var fsm = FlowStateMachine.Create<GameFlowState, GameFlowTrigger>()
     .Build();
 
 await fsm.StartAsync(); // Booting → Splash → Entering → Playing
+if (fsm.CanFire(GameFlowTrigger.ForcePlay))
+    await fsm.TryFireAsync(GameFlowTrigger.ForcePlay);
 ```
 
 ## 启动流程
@@ -95,6 +100,14 @@ await fsm.StartAsync(); // Booting → Splash → Entering → Playing
 `None` → `Booting` → `Splash`（`SplashCoverFlow`）→ `Entering` → `Playing`
 
 状态 Enter 故障时进入 `Failed`，再自动 fail-open 到 `Playing`。未进入 `Playing` 前，抛币与清零输入锁定。
+
+## 对局流程（Match FSM）
+
+由 `GameManager` 内嵌 `FlowStateMachine<MatchState, MatchTrigger>`：
+
+`Idle` —Flip→ `Flipping`（OnEnter：`coin.TryFlip` + 等待落地）—AutoAdvance→ `Idle`
+
+Busy 时 Ignore；Enter 故障 GoTo `Idle`。`CanAcceptGameplayInput` 同时要求启动态 Playing 与对局 Idle。
 
 ## 说明
 

@@ -55,6 +55,60 @@ namespace CoinFlip.FlowFramework
         public event Action<TState, TState> StateChanged;
         public event Action<Exception> Faulted;
 
+        /// <summary>Recent state visits (oldest → newest), capped.</summary>
+        public IReadOnlyList<TState> History => _history;
+
+        const int MaxHistory = 32;
+        readonly List<TState> _history = new List<TState>(8);
+
+        /// <summary>True when <paramref name="trigger"/> has a permitted edge from <see cref="Current"/>.</summary>
+        public bool CanFire(TTrigger trigger) => TryResolve(Current, trigger, out _);
+
+        /// <summary>Fire if permitted; otherwise returns a completed Flow (no-op).</summary>
+        public Flow TryFireAsync(TTrigger trigger, CancellationToken cancellationToken = default)
+        {
+            if (!CanFire(trigger))
+            {
+                return Flow.Completed();
+            }
+
+            return FireAsync(trigger, cancellationToken);
+        }
+
+        /// <summary>True when the machine is in <paramref name="state"/> and not mid-transition.</summary>
+        public bool IsIn(TState state) =>
+            !_busy && StateComparer.Equals(Current, state);
+
+        /// <summary>Completes when the machine reaches <paramref name="state"/> (or is already there and idle).</summary>
+        public async Flow WaitUntilAsync(TState state, CancellationToken cancellationToken = default)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                if (IsIn(state))
+                {
+                    return;
+                }
+
+                await Flow.NextFrame(cancellationToken);
+            }
+
+            throw new OperationCanceledException(cancellationToken);
+        }
+
+        /// <summary>Completes when the machine is not busy.</summary>
+        public async Flow WaitUntilIdleAsync(CancellationToken cancellationToken = default)
+        {
+            while (_busy && !cancellationToken.IsCancellationRequested)
+            {
+                await Flow.NextFrame(cancellationToken);
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+        }
+
         /// <summary>
         /// Enter the configured initial state, then auto-advance until stable.
         /// </summary>
@@ -263,8 +317,18 @@ namespace CoinFlip.FlowFramework
 
             Previous = Current;
             Current = next;
+            RecordHistory(next);
             StateChanged?.Invoke(Previous.Value, Current);
             Debug.Log($"[FlowStateMachine] {Previous} → {Current}");
+        }
+
+        void RecordHistory(TState state)
+        {
+            _history.Add(state);
+            if (_history.Count > MaxHistory)
+            {
+                _history.RemoveAt(0);
+            }
         }
 
         bool TryResolve(TState from, TTrigger trigger, out TState to)
