@@ -34,23 +34,47 @@
 ```
 Assets/
   Scenes/Main.unity
+  Scripts/Flow/                 # 自研可等待 Promise 框架
+    Flow.cs / Flow.T.cs         # Flow / Flow<T>（可继承）
+    IFlowAwaitable.cs           # 外部可实现的可等待接口
+    Flow.WhenAll.cs             # WhenAll 2–16 路组合
+    FlowAwaiter.cs / FlowRunner.cs
+    Examples/SplashCoverFlow.cs # 继承 Flow 的示例
   Scripts/Gameplay/
-    GameFlowController.cs   # 启动流程：Booting → Splash → Entering → Playing
-    GameFlowState.cs
-    SplashView.cs           # 日记封面闪屏
-    GameBootstrap.cs        # 运行时搭建世界 / UI
+    GameFlowController.cs       # 启动：Booting → Splash → Entering → Playing
+    GameFlowState.cs / SplashView.cs / GameBootstrap.cs
     CoinController.cs / GameManager.cs / CoinSparkBurst.cs
   Scripts/UI/GameUI.cs
   Editor/CoinFlipEditorMenu.cs
 ```
 
+## Flow 框架（带返回值的可等待）
+
+行业常见写法（对齐 UniTask 一类库）：
+
+- 继承 `Flow` / `Flow<T>`，或实现 `IFlowAwaitable` / `IFlowAwaitable<T>`
+- `await flow`（在 async Task 中）或 `yield return flow.ToYieldInstruction()`（协程）
+- `Flow.WhenAll(...)` 支持 **2–16** 个带返回值的 Flow，结果为 ValueTuple
+- 工厂：`Delay` / `NextFrame` / `FromCoroutine` / `Create` / `FromResult`
+
+```csharp
+// 继承后可直接等待
+public sealed class LoadConfigFlow : Flow<string>
+{
+    // 完成后调用 SetResult(json) / SetException(ex)
+}
+
+var (a, b) = await Flow.WhenAll(flowA, flowB);
+yield return Flow.Delay(0.3f).ToYieldInstruction();
+```
+
 ## 启动流程
 
-由 `GameFlowController` 驱动：
+由 `GameFlowController` 驱动（内部已用 Flow）：
 
-`Booting` → `GameBootstrap.Build()` 搭世界 → `Splash`（日记封面，可点跳过）→ `Entering`（淡出）→ `Playing`
+`Booting` → `Splash`（`SplashCoverFlow`）→ `Entering` → `Playing`
 
-未进入 `Playing` 前，抛币与清零输入锁定。仅挂 `GameBootstrap` 的场景会自动补上 FlowController。
+未进入 `Playing` 前，抛币与清零输入锁定。
 
 ## 说明
 
