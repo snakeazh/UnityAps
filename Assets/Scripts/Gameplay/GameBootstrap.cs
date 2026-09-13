@@ -24,12 +24,17 @@ namespace CoinFlip
 
         void Awake()
         {
-            Application.targetFrameRate = 60;
-            Screen.sleepTimeout = SleepTimeout.NeverSleep;
-            BuildWorld();
+            // Ensure a flow controller exists so legacy scenes that only place GameBootstrap still boot.
+            if (GetComponent<GameFlowController>() == null)
+            {
+                gameObject.AddComponent<GameFlowController>();
+            }
         }
 
-        void BuildWorld()
+        /// <summary>
+        /// Builds camera / coin / UI / splash. Called by <see cref="GameFlowController"/> during Booting.
+        /// </summary>
+        public GameBuildContext Build()
         {
             SetupCamera();
             SetupLights();
@@ -39,7 +44,17 @@ namespace CoinFlip
 
             var manager = gameObject.GetComponent<GameManager>() ?? gameObject.AddComponent<GameManager>();
             manager.Bind(coin);
-            BuildUi(manager, sparks);
+
+            var canvas = BuildUi(manager, sparks, out var ui, out var splash);
+            return new GameBuildContext
+            {
+                Manager = manager,
+                Ui = ui,
+                Coin = coin,
+                Sparks = sparks,
+                Splash = splash,
+                RootCanvas = canvas
+            };
         }
 
         void SetupCamera()
@@ -172,7 +187,7 @@ namespace CoinFlip
             return mat;
         }
 
-        void BuildUi(GameManager manager, CoinSparkBurst sparks)
+        Canvas BuildUi(GameManager manager, CoinSparkBurst sparks, out GameUI ui, out SplashView splash)
         {
             EnsureEventSystem();
 
@@ -221,8 +236,13 @@ namespace CoinFlip
             var flipBtn = CreateButton(bottom.transform, "FlipButton", "抛一次", Coral, 0.08f, 0.08f, 0.58f, 0.42f);
             var resetBtn = CreateButton(bottom.transform, "ResetButton", "清零", new Color(0.72f, 0.62f, 0.5f), 0.62f, 0.08f, 0.92f, 0.42f);
 
-            var ui = gameObject.GetComponent<GameUI>() ?? gameObject.AddComponent<GameUI>();
+            // Splash sits on top of gameplay UI and is driven by GameFlowController.
+            splash = SplashView.Create(canvasGo.transform);
+            splash.transform.SetAsLastSibling();
+
+            ui = gameObject.GetComponent<GameUI>() ?? gameObject.AddComponent<GameUI>();
             ui.Bind(manager, title, slogan, hint, result, reward, stats, flipBtn, resetBtn, sparks);
+            return canvas;
         }
 
         static void EnsureEventSystem()

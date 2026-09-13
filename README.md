@@ -34,12 +34,23 @@
 ```
 Assets/
   Scenes/Main.unity
-  Scripts/Gameplay/   # CoinController / GameManager / GameBootstrap / CoinSparkBurst
+  Scripts/Gameplay/
+    GameFlowController.cs   # 启动流程：Booting → Splash → Entering → Playing
+    GameFlowState.cs
+    SplashView.cs           # 日记封面闪屏
+    GameBootstrap.cs        # 运行时搭建世界 / UI
+    CoinController.cs / GameManager.cs / CoinSparkBurst.cs
   Scripts/UI/GameUI.cs
   Editor/CoinFlipEditorMenu.cs
 ```
 
-`GameBootstrap` 运行时搭建暖色桌面、花/字金币与日记风 UI。
+## 启动流程
+
+由 `GameFlowController` 驱动：
+
+`Booting` → `GameBootstrap.Build()` 搭世界 → `Splash`（日记封面，可点跳过）→ `Entering`（淡出）→ `Playing`
+
+未进入 `Playing` 前，抛币与清零输入锁定。仅挂 `GameBootstrap` 的场景会自动补上 FlowController。
 
 ## 说明
 

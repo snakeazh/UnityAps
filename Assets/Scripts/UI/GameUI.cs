@@ -111,7 +111,8 @@ namespace CoinFlip
                 return;
             }
 
-            if (!gameManager.IsBusy && WasPrimaryTap() && !IsPointerOverInteractiveUi())
+            var canPlay = gameManager.CanAcceptGameplayInput;
+            if (canPlay && WasPrimaryTap() && !IsPointerOverInteractiveUi())
             {
                 gameManager.TryFlip();
                 Refresh();
@@ -119,7 +120,12 @@ namespace CoinFlip
 
             if (flipButton != null)
             {
-                flipButton.interactable = !gameManager.IsBusy;
+                flipButton.interactable = canPlay;
+            }
+
+            if (resetButton != null)
+            {
+                resetButton.interactable = canPlay;
             }
         }
 

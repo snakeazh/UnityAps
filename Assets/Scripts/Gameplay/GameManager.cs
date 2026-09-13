@@ -4,7 +4,7 @@ using UnityEngine;
 namespace CoinFlip
 {
     /// <summary>
-    /// Owns flip requests, persistent statistics, and high-level game flow.
+    /// Owns flip requests, persistent statistics, and gameplay gating via <see cref="GameFlowController"/>.
     /// </summary>
     public sealed class GameManager : MonoBehaviour
     {
@@ -13,12 +13,19 @@ namespace CoinFlip
         const string PrefTotal = "CoinFlip.Total";
 
         [SerializeField] CoinController coin;
+        [SerializeField] GameFlowController flow;
 
         public int HeadsCount { get; private set; }
         public int TailsCount { get; private set; }
         public int TotalFlips { get; private set; }
         public CoinSide? LastResult { get; private set; }
         public bool IsBusy => coin != null && coin.IsFlipping;
+
+        /// <summary>
+        /// True only after startup reaches <see cref="GameFlowState.Playing"/>.
+        /// </summary>
+        public bool CanAcceptGameplayInput =>
+            (flow == null || flow.CanAcceptGameplayInput) && !IsBusy;
 
         public event Action StatsChanged;
         public event Action FlipStarted;
@@ -43,6 +50,11 @@ namespace CoinFlip
             }
         }
 
+        public void BindFlow(GameFlowController flowController)
+        {
+            flow = flowController;
+        }
+
         void Awake()
         {
             LoadStats();
@@ -60,7 +72,7 @@ namespace CoinFlip
 
         public bool TryFlip()
         {
-            if (coin == null || coin.IsFlipping)
+            if (!CanAcceptGameplayInput || coin == null)
             {
                 return false;
             }
@@ -70,6 +82,11 @@ namespace CoinFlip
 
         public void ResetStats()
         {
+            if (flow != null && !flow.CanAcceptGameplayInput)
+            {
+                return;
+            }
+
             HeadsCount = 0;
             TailsCount = 0;
             TotalFlips = 0;
