@@ -59,8 +59,7 @@ namespace CoinFlip
                 }
             }
 
-            var fromResources = Resources.Load<GameTuning>(GameAssetLocations.GameTuning);
-            return fromResources != null ? fromResources : CreateRuntimeDefault();
+            return CreateRuntimeDefault();
         }
     }
 }

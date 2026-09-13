@@ -8,8 +8,8 @@ namespace CoinFlip.Assets
 {
     /// <summary>
     /// Package facade aligned with YooAsset <c>ResourcePackage</c>.
-    /// Local backend: AddressCatalog + Resources + SceneManager.
-    /// Define <c>YOOASSET</c> and drop in the official plugin to swap the backend.
+    /// Local backend loads <b>only</b> files under <see cref="ResRoot.Folder"/>.
+    /// Scenes still go through Build Settings by location.
     /// </summary>
     public sealed class ResourcePackage
     {
@@ -38,10 +38,10 @@ namespace CoinFlip.Assets
                 PlayMode = EPlayMode.OfflinePlayMode;
             }
 
-            _catalog = Resources.Load<AddressCatalog>(parameters.CatalogResourcesPath);
+            _catalog = LoadCatalog(parameters.CatalogAssetPath);
             _initialized = true;
             op.Complete(true);
-            Debug.Log($"[ResourcePackage] '{PackageName}' initialized ({PlayMode}).");
+            Debug.Log($"[ResourcePackage] '{PackageName}' initialized ({PlayMode}), root={ResRoot.Folder}.");
             return op;
         }
 
@@ -110,26 +110,59 @@ namespace CoinFlip.Assets
 
         UnityEngine.Object LoadLocal(string location, Type type)
         {
-            if (_catalog != null && _catalog.TryResolve(location, out var entry))
+            if (!_catalog.TryResolve(location, out var entry) ||
+                string.IsNullOrEmpty(entry.assetPath))
             {
-                if (!string.IsNullOrEmpty(entry.resourcesPath))
-                {
-                    var mapped = Resources.Load(entry.resourcesPath, type);
-                    if (mapped != null)
-                    {
-                        return mapped;
-                    }
-                }
+                return null;
             }
 
-            var direct = Resources.Load(location, type);
-            if (direct != null)
+            if (!string.IsNullOrEmpty(entry.sceneName))
             {
-                return direct;
+                return null;
             }
 
-            var fileName = System.IO.Path.GetFileNameWithoutExtension(location);
-            return string.IsNullOrEmpty(fileName) ? null : Resources.Load(fileName, type);
+            return LoadResAsset(entry.assetPath, type);
+        }
+
+        static AddressCatalog LoadCatalog(string catalogAssetPath)
+        {
+            var path = string.IsNullOrEmpty(catalogAssetPath)
+                ? ResRoot.CatalogAssetPath
+                : catalogAssetPath;
+            if (!ResRoot.Contains(path))
+            {
+                Debug.LogError($"[ResourcePackage] Catalog must live under {ResRoot.Folder}: {path}");
+                return AddressCatalog.CreateBuiltin();
+            }
+
+            var catalog = LoadResAsset(path, typeof(AddressCatalog)) as AddressCatalog;
+            return catalog != null ? catalog : AddressCatalog.CreateBuiltin();
+        }
+
+        static UnityEngine.Object LoadResAsset(string assetPath, Type type)
+        {
+            var path = ResRoot.Normalize(assetPath);
+            if (!ResRoot.Contains(path))
+            {
+                Debug.LogWarning($"[ResourcePackage] Refused path outside {ResRoot.Folder}: {path}");
+                return null;
+            }
+
+#if UNITY_EDITOR
+            var fromEditor = UnityEditor.AssetDatabase.LoadAssetAtPath(path, type);
+            if (fromEditor != null)
+            {
+                return fromEditor;
+            }
+#endif
+
+            // Player / fallback: only Resources keys that map to Assets/Res (Resources/Res/...).
+            if (ResRoot.TryToResourcesKey(path, out var key))
+            {
+                return Resources.Load(key, type);
+            }
+
+            return null;
         }
 
         string ResolveSceneName(string location)

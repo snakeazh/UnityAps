@@ -10,10 +10,7 @@ namespace CoinFlip.Assets
         [Tooltip("YooAsset location / address.")]
         public string location;
 
-        [Tooltip("Resources.Load path (no extension), used by the local backend.")]
-        public string resourcesPath;
-
-        [Tooltip("Full project path (YooAsset asset path).")]
+        [Tooltip("Full project path under Assets/Res (the only loadable root).")]
         public string assetPath;
 
         [Tooltip("Build Settings scene name, when this address is a scene.")]
@@ -21,8 +18,7 @@ namespace CoinFlip.Assets
     }
 
     /// <summary>
-    /// Maps locations to Resources / scene names so the local backend behaves like
-    /// YooAsset addressable loading. Swap the package implementation to real YooAsset later.
+    /// Maps locations to paths under <see cref="ResRoot.Folder"/> (or scene names).
     /// </summary>
     [CreateAssetMenu(fileName = "AddressCatalog", menuName = "CoinFlip/Address Catalog", order = 1)]
     public sealed class AddressCatalog : ScriptableObject
@@ -46,7 +42,6 @@ namespace CoinFlip.Assets
                 }
 
                 if (LocationsEqual(item.location, location) ||
-                    LocationsEqual(item.resourcesPath, location) ||
                     LocationsEqual(item.sceneName, location) ||
                     PathsEqual(item.assetPath, location))
                 {
@@ -77,6 +72,18 @@ namespace CoinFlip.Assets
             // YooAsset: path without extension also matches.
             var noExt = System.IO.Path.ChangeExtension(assetPath, null);
             return string.Equals(noExt, location, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static AddressCatalog CreateBuiltin()
+        {
+            var catalog = CreateInstance<AddressCatalog>();
+            catalog.name = "AddressCatalog (Builtin)";
+            catalog.entries.Add(new AddressEntry
+            {
+                location = GameAssetLocations.GameTuning,
+                assetPath = ResRoot.Folder + "/GameTuning.asset"
+            });
+            return catalog;
         }
     }
 }

@@ -14,10 +14,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   entries:
   - location: GameTuning
-    resourcesPath: GameTuning
-    assetPath: Assets/Resources/GameTuning.asset
+    assetPath: Assets/Res/GameTuning.asset
     sceneName: 
   - location: Main
-    resourcesPath: 
-    assetPath: Assets/Scenes/Main.unity
+    assetPath: 
     sceneName: Main

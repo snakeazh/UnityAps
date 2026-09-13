@@ -4,6 +4,6 @@ namespace CoinFlip.Assets
     public sealed class ResourceInitParameters
     {
         public EPlayMode PlayMode = EPlayMode.OfflinePlayMode;
-        public string CatalogResourcesPath = "AddressCatalog";
+        public string CatalogAssetPath = ResRoot.CatalogAssetPath;
     }
 }

@@ -39,9 +39,9 @@ Assets/
   Scenes/
     Boot.unity                  # 空启动场景（index 0）→ 异步加载 Main
     Main.unity                  # 玩法场景
-  Resources/
-    GameTuning.asset            # 默认调参
-    AddressCatalog.asset        # location → Resources/场景 映射
+  Res/                          # 唯一可加载资源根（YooAsset 收集目录）
+    AddressCatalog.asset
+    GameTuning.asset
   Scripts/Framework/            # 轻量 App 服务层
     Assets/                     # YooAsset 对齐的资源管理
     GameServices.cs             # 组合根（非 DI）
@@ -56,7 +56,7 @@ Assets/
     FlowAwaiter.cs / FlowRunner.cs
     Examples/SplashCoverFlow.cs # 继承 Flow 的示例
   Scripts/Gameplay/
-    BootSceneLoader.cs          # Boot → 查找并 LoadAsync 目标场景
+    BootSceneLoader.cs          # Boot → GameAssets 初始化后按 location 进 Main
     GameFlowController.cs       # 启动 FSM：Booting → … → Playing
     GameManager.cs              # 对局 FSM：Idle ⇄ Flipping
     MatchState.cs / GameFlowState.cs / SplashView.cs / GameBootstrap.cs
@@ -111,11 +111,11 @@ if (fsm.CanFire(GameFlowTrigger.ForcePlay))
 
 ## 场景过渡（Boot → Main）
 
-应用从空场景 `Boot` 启动：`BootSceneLoader` 在 Build Settings 中**按名查找**目标场景（默认 `Main`），再 `LoadSceneAsync(..., Single)` 替换过去。
+应用从空场景 `Boot` 启动：`BootSceneLoader` 先 `GameAssets.EnsureInitializedAsync`，再按 **location**（默认 `Main`）`LoadSceneAsync`。
 
 - Build Settings 顺序：`Boot`（0）→ `Main`（1）
 - 玩法 Splash / FSM 仍在 `Main` 内由 `GameFlowController` 驱动
-- 目标场景名可在 Boot 场景的 `BootSceneLoader` 上改
+- 目标 location / 包名可在 Boot 场景的 `BootSceneLoader` 上改
 
 ## 启动流程
 
@@ -147,10 +147,11 @@ handle.Release();
 await GameAssets.LoadSceneAsync("Main"); // location，不是随意路径
 ```
 
-- **Location**：可寻址名（`GameTuning`、`Main`），也支持完整路径 / 无扩展名匹配
-- **地址表**：`Resources/AddressCatalog.asset`（本地后端把 location 映射到 Resources / 场景名）
+- **Location**：可寻址名（`GameTuning`、`Main`），也支持 `Assets/Res/...` 完整路径
+- **只加载 `Assets/Res`**：资源对象必须落在该目录；目录外路径会被拒绝
+- **地址表**：`Assets/Res/AddressCatalog.asset`
 - **PlayMode**：`EditorSimulateMode` / `OfflinePlayMode`；`HostPlayMode` 需接入官方 YooAsset 插件，否则回退 Offline
-- Boot 场景先 `EnsureInitializedAsync`，再按 location 加载 `Main`
+- Boot 场景先 `EnsureInitializedAsync`，再按 location 加载 `Main`（场景仍走 Build Settings）
 
 接入官方插件后：保留 location 与调用面，把 `ResourcePackage` 后端换成 `YooAsset.ResourcePackage` 即可。
 
@@ -160,7 +161,7 @@ Booting 时 `GameServices.Ensure` 挂到根物体，经 `GameBuildContext` 分�
 
 | 服务 | 职责 |
 |------|------|
-| `GameTuning` | Splash/淡出/抛币手感/奖励文案/SFX 槽；缺省走 `Resources/GameTuning` 或运行时默认 |
+| `GameTuning` | Splash/淡出/抛币手感/奖励文案/SFX 槽；从 `Assets/Res` 按 location 加载，失败则运行时默认 |
 | `GameSettings` | `Muted`、`HapticsEnabled`（预留）独立 PlayerPrefs |
 | `AudioService` | `PlayToss` / `PlayLand` / `PlayUiClick`；静音或空 clip 时 no-op |
 | `AppLifecycle` | `OnApplicationPause` / `Focus` → `IsPaused`；**不**改 `timeScale`，不取消飞行中抛币 |
