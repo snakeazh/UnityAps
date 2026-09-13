@@ -15,14 +15,45 @@ namespace CoinFlip.FlowFramework
         static int s_nextId = 1;
 
         readonly int _id = s_nextId++;
+        readonly object _gate = new object();
         bool _completed;
         Exception _exception;
         Action _continuation;
         readonly List<Action> _extraContinuations = new List<Action>(0);
 
-        public bool IsCompleted => _completed;
-        public bool IsFaulted => _completed && _exception != null;
-        public bool IsCanceled => _exception is OperationCanceledException;
+        public bool IsCompleted
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _completed;
+                }
+            }
+        }
+
+        public bool IsFaulted
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _completed && _exception != null;
+                }
+            }
+        }
+
+        public bool IsCanceled
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _exception is OperationCanceledException;
+                }
+            }
+        }
+
         public int Id => _id;
 
         public FlowAwaiter GetAwaiter() => new FlowAwaiter(this);
@@ -34,27 +65,41 @@ namespace CoinFlip.FlowFramework
                 throw new ArgumentNullException(nameof(continuation));
             }
 
-            if (_completed)
+            var alreadyDone = false;
+            lock (_gate)
             {
-                FlowRunner.Post(continuation);
-                return;
+                if (_completed)
+                {
+                    alreadyDone = true;
+                }
+                else if (_continuation == null)
+                {
+                    _continuation = continuation;
+                }
+                else
+                {
+                    _extraContinuations.Add(continuation);
+                }
             }
 
-            if (_continuation == null)
+            if (alreadyDone)
             {
-                _continuation = continuation;
-            }
-            else
-            {
-                _extraContinuations.Add(continuation);
+                // Always marshal to main-thread pump.
+                FlowRunner.Post(continuation);
             }
         }
 
         public void ThrowIfFaulted()
         {
-            if (_exception != null)
+            Exception error;
+            lock (_gate)
             {
-                throw _exception;
+                error = _exception;
+            }
+
+            if (error != null)
+            {
+                throw error;
             }
         }
 
@@ -86,18 +131,33 @@ namespace CoinFlip.FlowFramework
 
         void Complete(Exception exception)
         {
-            if (_completed)
+            // Completion always runs on the Unity main thread so Unity API use in
+            // continuations / subclass overrides stays safe.
+            if (!FlowRunner.IsMainThread)
             {
+                FlowRunner.Post(() => Complete(exception));
                 return;
             }
 
-            _completed = true;
-            _exception = exception;
+            Action first = null;
+            Action[] extras = null;
+            lock (_gate)
+            {
+                if (_completed)
+                {
+                    return;
+                }
 
-            var first = _continuation;
-            _continuation = null;
-            var extras = _extraContinuations.Count > 0 ? _extraContinuations.ToArray() : null;
-            _extraContinuations.Clear();
+                _completed = true;
+                _exception = exception;
+                first = _continuation;
+                _continuation = null;
+                if (_extraContinuations.Count > 0)
+                {
+                    extras = _extraContinuations.ToArray();
+                    _extraContinuations.Clear();
+                }
+            }
 
             if (first != null)
             {

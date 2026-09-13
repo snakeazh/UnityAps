@@ -9,14 +9,34 @@ namespace CoinFlip.FlowFramework
     /// </summary>
     public class Flow<T> : IFlowAwaitable<T>
     {
+        readonly object _gate = new object();
         bool _completed;
         T _result;
         Exception _exception;
         Action _continuation;
         readonly List<Action> _extraContinuations = new List<Action>(0);
 
-        public bool IsCompleted => _completed;
-        public bool IsFaulted => _completed && _exception != null;
+        public bool IsCompleted
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _completed;
+                }
+            }
+        }
+
+        public bool IsFaulted
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _completed && _exception != null;
+                }
+            }
+        }
 
         public FlowAwaiter<T> GetAwaiter() => new FlowAwaiter<T>(this);
 
@@ -27,30 +47,45 @@ namespace CoinFlip.FlowFramework
                 throw new ArgumentNullException(nameof(continuation));
             }
 
-            if (_completed)
+            var alreadyDone = false;
+            lock (_gate)
             {
-                FlowRunner.Post(continuation);
-                return;
+                if (_completed)
+                {
+                    alreadyDone = true;
+                }
+                else if (_continuation == null)
+                {
+                    _continuation = continuation;
+                }
+                else
+                {
+                    _extraContinuations.Add(continuation);
+                }
             }
 
-            if (_continuation == null)
+            if (alreadyDone)
             {
-                _continuation = continuation;
-            }
-            else
-            {
-                _extraContinuations.Add(continuation);
+                FlowRunner.Post(continuation);
             }
         }
 
         public T GetResult()
         {
-            if (_exception != null)
+            Exception error;
+            T value;
+            lock (_gate)
             {
-                throw _exception;
+                error = _exception;
+                value = _result;
             }
 
-            return _result;
+            if (error != null)
+            {
+                throw error;
+            }
+
+            return value;
         }
 
         protected void SetResult(T value) => Complete(value, null);
@@ -69,19 +104,32 @@ namespace CoinFlip.FlowFramework
 
         void Complete(T value, Exception exception)
         {
-            if (_completed)
+            if (!FlowRunner.IsMainThread)
             {
+                FlowRunner.Post(() => Complete(value, exception));
                 return;
             }
 
-            _completed = true;
-            _result = value;
-            _exception = exception;
+            Action first = null;
+            Action[] extras = null;
+            lock (_gate)
+            {
+                if (_completed)
+                {
+                    return;
+                }
 
-            var first = _continuation;
-            _continuation = null;
-            var extras = _extraContinuations.Count > 0 ? _extraContinuations.ToArray() : null;
-            _extraContinuations.Clear();
+                _completed = true;
+                _result = value;
+                _exception = exception;
+                first = _continuation;
+                _continuation = null;
+                if (_extraContinuations.Count > 0)
+                {
+                    extras = _extraContinuations.ToArray();
+                    _extraContinuations.Clear();
+                }
+            }
 
             if (first != null)
             {
