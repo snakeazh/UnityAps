@@ -56,6 +56,7 @@ Assets/
 - `await flow`（在 async Task 中）或 `yield return flow.ToYieldInstruction()`（协程）
 - `Flow.WhenAll(...)` 支持 **2–16** 个带返回值的 Flow，结果为 ValueTuple
 - 工厂：`Delay` / `NextFrame` / `FromCoroutine` / `Create` / `FromResult`
+- 主线程：`TrySet*` 自动切回主线程完成；`await Flow.SwitchToMainThread()`；`FlowRunner.Ensure` 禁止非主线程创建
 
 ```csharp
 // 继承后可直接等待
@@ -66,6 +67,10 @@ public sealed class LoadConfigFlow : Flow<string>
 
 var (a, b) = await Flow.WhenAll(flowA, flowB);
 yield return Flow.Delay(0.3f).ToYieldInstruction();
+
+// 后台线程回到主线程后再碰 Unity API
+await Flow.SwitchToMainThread();
+transform.position = Vector3.zero;
 ```
 
 ## 启动流程
