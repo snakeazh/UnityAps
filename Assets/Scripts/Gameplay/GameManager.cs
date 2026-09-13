@@ -4,7 +4,7 @@ using UnityEngine;
 namespace CoinFlip
 {
     /// <summary>
-    /// Owns flip requests, persistent statistics, and high-level game flow.
+    /// Owns flip requests, persistent statistics, and gameplay gating via <see cref="GameFlowController"/>.
     /// </summary>
     public sealed class GameManager : MonoBehaviour
     {
@@ -13,6 +13,7 @@ namespace CoinFlip
         const string PrefTotal = "CoinFlip.Total";
 
         [SerializeField] CoinController coin;
+        [SerializeField] GameFlowController flow;
 
         public int HeadsCount { get; private set; }
         public int TailsCount { get; private set; }
@@ -20,21 +21,38 @@ namespace CoinFlip
         public CoinSide? LastResult { get; private set; }
         public bool IsBusy => coin != null && coin.IsFlipping;
 
+        /// <summary>
+        /// True only after startup reaches <see cref="GameFlowState.Playing"/>.
+        /// </summary>
+        public bool CanAcceptGameplayInput =>
+            (flow == null || flow.CanAcceptGameplayInput) && !IsBusy;
+
         public event Action StatsChanged;
+        public event Action FlipStarted;
+        public event Action Landed;
         public event Action<CoinSide> FlipResolved;
 
         public void Bind(CoinController coinController)
         {
             if (coin != null)
             {
+                coin.FlipStarted -= OnFlipStarted;
+                coin.Landed -= OnLanded;
                 coin.FlipCompleted -= OnFlipCompleted;
             }
 
             coin = coinController;
             if (coin != null)
             {
+                coin.FlipStarted += OnFlipStarted;
+                coin.Landed += OnLanded;
                 coin.FlipCompleted += OnFlipCompleted;
             }
+        }
+
+        public void BindFlow(GameFlowController flowController)
+        {
+            flow = flowController;
         }
 
         void Awake()
@@ -46,13 +64,15 @@ namespace CoinFlip
         {
             if (coin != null)
             {
+                coin.FlipStarted -= OnFlipStarted;
+                coin.Landed -= OnLanded;
                 coin.FlipCompleted -= OnFlipCompleted;
             }
         }
 
         public bool TryFlip()
         {
-            if (coin == null || coin.IsFlipping)
+            if (!CanAcceptGameplayInput || coin == null)
             {
                 return false;
             }
@@ -62,12 +82,27 @@ namespace CoinFlip
 
         public void ResetStats()
         {
+            if (flow != null && !flow.CanAcceptGameplayInput)
+            {
+                return;
+            }
+
             HeadsCount = 0;
             TailsCount = 0;
             TotalFlips = 0;
             LastResult = null;
             SaveStats();
             StatsChanged?.Invoke();
+        }
+
+        void OnFlipStarted()
+        {
+            FlipStarted?.Invoke();
+        }
+
+        void OnLanded()
+        {
+            Landed?.Invoke();
         }
 
         void OnFlipCompleted(CoinSide side)

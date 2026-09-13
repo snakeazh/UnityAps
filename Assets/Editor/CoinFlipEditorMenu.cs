@@ -27,9 +27,9 @@ namespace CoinFlip.EditorTools
             var cam = Camera.main;
             if (cam != null)
             {
-                cam.transform.position = new Vector3(0f, 1.1f, -4.2f);
-                cam.transform.rotation = Quaternion.Euler(12f, 0f, 0f);
-                cam.backgroundColor = new Color(0.07f, 0.09f, 0.12f);
+                cam.transform.position = new Vector3(0f, 0.85f, -4.6f);
+                cam.transform.rotation = Quaternion.Euler(8f, 0f, 0f);
+                cam.backgroundColor = new Color(0.97f, 0.93f, 0.84f);
             }
 
             EditorSceneManager.SaveScene(scene, ScenePath);
