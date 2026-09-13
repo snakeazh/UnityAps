@@ -39,8 +39,11 @@ Assets/
   Scenes/
     Boot.unity                  # 空启动场景（index 0）→ 异步加载 Main
     Main.unity                  # 玩法场景
-  Resources/GameTuning.asset    # 默认调参（也可放 Settings/）
+  Resources/
+    GameTuning.asset            # 默认调参
+    AddressCatalog.asset        # location → Resources/场景 映射
   Scripts/Framework/            # 轻量 App 服务层
+    Assets/                     # YooAsset 对齐的资源管理
     GameServices.cs             # 组合根（非 DI）
     GameTuning.cs               # ScriptableObject 调参
     GameSettings.cs             # 静音 / 震动开关（PlayerPrefs）
@@ -129,6 +132,27 @@ if (fsm.CanFire(GameFlowTrigger.ForcePlay))
 `Idle` —Flip→ `Flipping`（OnEnter：`coin.TryFlip` + 等待落地）—AutoAdvance→ `Idle`
 
 Busy 时 Ignore；Enter 故障 GoTo `Idle`。`CanAcceptGameplayInput` 同时要求启动态 Playing、对局 Idle，且 App 未暂停。
+
+## 资源管理（对齐 YooAsset）
+
+API 对齐官方 [YooAsset](https://www.yooasset.com/docs/guide-runtime/ResourceLoad)：`GameAssets` ≈ `YooAssets`，`ResourcePackage` / `AssetHandle` / `SceneHandle` / `EPlayMode`。
+
+```csharp
+await GameAssets.EnsureInitializedAsync("DefaultPackage");
+var handle = GameAssets.LoadAssetAsync<GameTuning>("GameTuning");
+await handle;
+var tuning = handle.GetAssetObject<GameTuning>();
+handle.Release();
+
+await GameAssets.LoadSceneAsync("Main"); // location，不是随意路径
+```
+
+- **Location**：可寻址名（`GameTuning`、`Main`），也支持完整路径 / 无扩展名匹配
+- **地址表**：`Resources/AddressCatalog.asset`（本地后端把 location 映射到 Resources / 场景名）
+- **PlayMode**：`EditorSimulateMode` / `OfflinePlayMode`；`HostPlayMode` 需接入官方 YooAsset 插件，否则回退 Offline
+- Boot 场景先 `EnsureInitializedAsync`，再按 location 加载 `Main`
+
+接入官方插件后：保留 location 与调用面，把 `ResourcePackage` 后端换成 `YooAsset.ResourcePackage` 即可。
 
 ## App 服务层
 

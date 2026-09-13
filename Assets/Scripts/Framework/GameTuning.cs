@@ -1,3 +1,4 @@
+using CoinFlip.Assets;
 using UnityEngine;
 
 namespace CoinFlip
@@ -48,7 +49,17 @@ namespace CoinFlip
                 return preferred;
             }
 
-            var fromResources = Resources.Load<GameTuning>("GameTuning");
+            if (GameAssets.Initialized)
+            {
+                var handle = GameAssets.LoadAssetSync<GameTuning>(GameAssetLocations.GameTuning);
+                var fromPackage = handle.GetAssetObject<GameTuning>();
+                if (fromPackage != null)
+                {
+                    return fromPackage;
+                }
+            }
+
+            var fromResources = Resources.Load<GameTuning>(GameAssetLocations.GameTuning);
             return fromResources != null ? fromResources : CreateRuntimeDefault();
         }
     }

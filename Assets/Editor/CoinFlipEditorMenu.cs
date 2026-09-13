@@ -34,6 +34,7 @@ namespace CoinFlip.EditorTools
             var loaderGo = new GameObject("BootSceneLoader");
             var loader = loaderGo.AddComponent<BootSceneLoader>();
             var so = new SerializedObject(loader);
+            so.FindProperty("packageName").stringValue = "DefaultPackage";
             so.FindProperty("targetSceneName").stringValue = "Main";
             so.FindProperty("minHoldSeconds").floatValue = 0.05f;
             so.ApplyModifiedPropertiesWithoutUndo();

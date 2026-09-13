@@ -1,3 +1,4 @@
+using CoinFlip.Assets;
 using UnityEngine;
 
 namespace CoinFlip
@@ -20,6 +21,7 @@ namespace CoinFlip
         public GameSettings Settings => _settings;
         public AudioService Audio => _audio;
         public AppLifecycle Lifecycle => _lifecycle;
+        public ResourcePackage Assets => GameAssets.DefaultPackage;
 
         public bool IsPaused => _lifecycle != null && _lifecycle.IsPaused;
         public bool IsMuted => _settings != null && _settings.Muted;
@@ -42,6 +44,11 @@ namespace CoinFlip
                 }
 
                 return;
+            }
+
+            if (!GameAssets.Initialized)
+            {
+                GameAssets.EnsureInitializedAsync();
             }
 
             _tuning = GameTuning.ResolveOrDefault(preferredTuning != null ? preferredTuning : tuningAsset);
