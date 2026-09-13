@@ -15,15 +15,18 @@
 
 1. 安装 [Unity Hub](https://unity.com/download) 与 **Unity 2022.3.62f3**（勾选 **Android Build Support**）
 2. 用 Hub **打开本仓库根目录**
-3. 打开 `Assets/Scenes/Main.unity` → Play
+3. 打开 `Assets/Scenes/Boot.unity` → Play（空启动场景会异步切到 `Main`）
+
+菜单 `CoinFlip/Setup Boot Scene` / `Setup Main Scene` 可重建场景，并写入 Build Settings（Boot 为 index 0）。
 
 ## Android 构建
 
 | 菜单 | 作用 |
 |------|------|
-| `CoinFlip / Configure Android Player Settings` | 包名、竖屏、IL2CPP、ARM、MinSDK 23 / TargetSDK 34 |
-| `CoinFlip / Build Android APK (Development)` | 输出 `Builds/Android/CoinFlip.apk` |
+| `CoinFlip / Setup Boot Scene` | 生成空启动场景并写入 Build Settings（index 0） |
 | `CoinFlip / Setup Main Scene` | 重新生成 Main 场景 |
+| `CoinFlip / Configure Android Player Settings` | 包名、竖屏、IL2CPP、ARM、MinSDK 23 / TargetSDK 34 |
+| `CoinFlip / Build Android APK (Development)` | 输出 `Builds/Android/CoinFlip.apk`（含 Boot+Main） |
 
 - 产品名：`CoinFlip`
 - 包名：`com.unityaps.coinflip`
@@ -33,7 +36,9 @@
 
 ```
 Assets/
-  Scenes/Main.unity
+  Scenes/
+    Boot.unity                  # 空启动场景（index 0）→ 异步加载 Main
+    Main.unity                  # 玩法场景
   Resources/GameTuning.asset    # 默认调参（也可放 Settings/）
   Scripts/Framework/            # 轻量 App 服务层
     GameServices.cs             # 组合根（非 DI）
@@ -48,6 +53,7 @@ Assets/
     FlowAwaiter.cs / FlowRunner.cs
     Examples/SplashCoverFlow.cs # 继承 Flow 的示例
   Scripts/Gameplay/
+    BootSceneLoader.cs          # Boot → 查找并 LoadAsync 目标场景
     GameFlowController.cs       # 启动 FSM：Booting → … → Playing
     GameManager.cs              # 对局 FSM：Idle ⇄ Flipping
     MatchState.cs / GameFlowState.cs / SplashView.cs / GameBootstrap.cs
@@ -100,6 +106,14 @@ if (fsm.CanFire(GameFlowTrigger.ForcePlay))
     await fsm.TryFireAsync(GameFlowTrigger.ForcePlay);
 ```
 
+## 场景过渡（Boot → Main）
+
+应用从空场景 `Boot` 启动：`BootSceneLoader` 在 Build Settings 中**按名查找**目标场景（默认 `Main`），再 `LoadSceneAsync(..., Single)` 替换过去。
+
+- Build Settings 顺序：`Boot`（0）→ `Main`（1）
+- 玩法 Splash / FSM 仍在 `Main` 内由 `GameFlowController` 驱动
+- 目标场景名可在 Boot 场景的 `BootSceneLoader` 上改
+
 ## 启动流程
 
 由 `GameFlowController` + `FlowStateMachine` 驱动（自动推进）：
@@ -132,4 +146,4 @@ HUD「声音」按钮切换静音。暂停时只锁新输入（`TryFlip` 返回 
 ## 说明
 
 不含 `Library/`。请使用与 `ProjectSettings/ProjectVersion.txt` 一致的编辑器版本。  
-本环境无 Unity Editor，未做 Play Mode 实机验证；请在编辑器中点验：Booting 后 Services 非空、静音后无 SFX、切后台再回前台时抛币按钮锁定/恢复。
+本环境无 Unity Editor，未做 Play Mode 实机验证；请在编辑器中点验：从 `Boot` Play 能进 `Main`、Booting 后 Services 非空、静音后无 SFX、切后台再回前台时抛币按钮锁定/恢复。
