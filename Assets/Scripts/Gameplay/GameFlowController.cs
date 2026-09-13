@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using CoinFlip.FlowFramework;
 using UnityEngine;
 
 namespace CoinFlip
@@ -7,6 +8,7 @@ namespace CoinFlip
     /// <summary>
     /// Startup flow controller: Booting → Splash → Entering → Playing.
     /// Owns the launch sequence; gameplay input stays locked until <see cref="GameFlowState.Playing"/>.
+    /// Driven by the <see cref="Flow"/> promise framework (awaitable + WhenAll).
     /// </summary>
     [DefaultExecutionOrder(-200)]
     public sealed class GameFlowController : MonoBehaviour
@@ -53,21 +55,23 @@ namespace CoinFlip
             SetState(GameFlowState.Splash);
             if (_splash != null)
             {
-                yield return _splash.Play(splashMinSeconds, allowTapToSkipSplash);
+                // Inherit Flow to make a domain step directly awaitable / yieldable.
+                yield return new SplashCoverFlow(_splash, splashMinSeconds, allowTapToSkipSplash)
+                    .ToYieldInstruction();
             }
             else
             {
-                yield return new WaitForSecondsRealtime(splashMinSeconds);
+                yield return Flow.Delay(splashMinSeconds).ToYieldInstruction();
             }
 
             SetState(GameFlowState.Entering);
             if (_splash != null)
             {
-                yield return _splash.Hide(enterFadeSeconds);
+                yield return Flow.FromCoroutine(_splash.Hide(enterFadeSeconds)).ToYieldInstruction();
             }
 
             // One frame so UI layout settles before flips are allowed.
-            yield return null;
+            yield return Flow.NextFrame().ToYieldInstruction();
 
             SetState(GameFlowState.Playing);
             StartupCompleted?.Invoke();
