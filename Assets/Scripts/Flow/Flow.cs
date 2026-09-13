@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using UnityEngine;
 
@@ -10,7 +11,9 @@ namespace CoinFlip.FlowFramework
     /// Awaitable flow unit with no result. External types may inherit this class
     /// (or implement <see cref="IFlowAwaitable"/>) to participate in await / WhenAll.
     /// Static factories live here (industry-style entry API, similar to UniTask).
+    /// Supports <c>async Flow</c> via <see cref="AsyncFlowMethodBuilder"/>.
     /// </summary>
+    [AsyncMethodBuilder(typeof(AsyncFlowMethodBuilder))]
     public partial class Flow : IFlowAwaitable
     {
         static int s_nextId = 1;

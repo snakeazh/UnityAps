@@ -9,15 +9,25 @@ namespace CoinFlip.FlowFramework
     /// <summary>
     /// Pumps continuations and host coroutines on the Unity main thread.
     /// Creation is main-thread only; <see cref="Post"/> is safe from any thread.
+    /// Supports <see cref="PlayerLoopTiming"/> queues (Update / FixedUpdate / LateUpdate / EndOfFrame).
     /// </summary>
     public sealed class FlowRunner : MonoBehaviour
     {
+        const int TimingCount = 4;
+
         static FlowRunner s_instance;
         static int s_mainThreadId;
         static bool s_mainThreadCaptured;
-        static readonly Queue<Action> s_posted = new Queue<Action>(64);
+        static readonly Queue<Action>[] s_posted =
+        {
+            new Queue<Action>(64),
+            new Queue<Action>(16),
+            new Queue<Action>(16),
+            new Queue<Action>(16),
+        };
         static readonly List<Action> s_execBuffer = new List<Action>(64);
         static readonly object s_gate = new object();
+        static bool s_endOfFramePumpStarted;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         static void Bootstrap()
@@ -39,7 +49,6 @@ namespace CoinFlip.FlowFramework
             {
                 if (!s_mainThreadCaptured)
                 {
-                    // Extremely early call: treat current thread as main and capture.
                     CaptureMainThread();
                 }
 
@@ -69,25 +78,33 @@ namespace CoinFlip.FlowFramework
         }
 
         /// <summary>
-        /// Queue work onto the Unity main-thread Update pump. Safe from any thread.
-        /// Continuations always run on the next main-thread tick (avoids re-entrancy).
+        /// Queue work onto the Update pump. Safe from any thread.
+        /// Continuations always run on the next timed tick (avoids re-entrancy).
         /// </summary>
-        public static void Post(Action action)
+        public static void Post(Action action) => Post(action, PlayerLoopTiming.Update);
+
+        /// <summary>Queue work onto a specific player-loop timing. Safe from any thread.</summary>
+        public static void Post(Action action, PlayerLoopTiming timing)
         {
             if (action == null)
             {
                 return;
             }
 
+            var index = ClampTiming(timing);
             lock (s_gate)
             {
-                s_posted.Enqueue(action);
+                s_posted[index].Enqueue(action);
             }
 
-            // Ensure the pump exists when called from the main thread before first Update.
             if (s_instance == null && IsMainThread)
             {
                 Ensure();
+            }
+
+            if (timing == PlayerLoopTiming.EndOfFrame && s_instance != null)
+            {
+                s_instance.EnsureEndOfFramePump();
             }
         }
 
@@ -131,13 +148,53 @@ namespace CoinFlip.FlowFramework
             return null;
         }
 
-        void Update()
+        static int ClampTiming(PlayerLoopTiming timing)
         {
+            var index = (int)timing;
+            if (index < 0 || index >= TimingCount)
+            {
+                return (int)PlayerLoopTiming.Update;
+            }
+
+            return index;
+        }
+
+        void EnsureEndOfFramePump()
+        {
+            if (s_endOfFramePumpStarted)
+            {
+                return;
+            }
+
+            s_endOfFramePumpStarted = true;
+            StartCoroutine(EndOfFramePump());
+        }
+
+        IEnumerator EndOfFramePump()
+        {
+            var wait = new WaitForEndOfFrame();
+            while (true)
+            {
+                yield return wait;
+                Drain(PlayerLoopTiming.EndOfFrame);
+            }
+        }
+
+        void Update() => Drain(PlayerLoopTiming.Update);
+
+        void FixedUpdate() => Drain(PlayerLoopTiming.FixedUpdate);
+
+        void LateUpdate() => Drain(PlayerLoopTiming.LateUpdate);
+
+        void Drain(PlayerLoopTiming timing)
+        {
+            var index = ClampTiming(timing);
             lock (s_gate)
             {
-                while (s_posted.Count > 0)
+                var queue = s_posted[index];
+                while (queue.Count > 0)
                 {
-                    s_execBuffer.Add(s_posted.Dequeue());
+                    s_execBuffer.Add(queue.Dequeue());
                 }
             }
 

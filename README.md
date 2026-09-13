@@ -62,6 +62,10 @@ Assets/
 - **未观察异常**：完成后若无人 `await`/`Forget`/`OnCompleted`，下一帧上报
 - **对象池**：工厂创建的 `Flow`/`Flow<T>` 在 `GetResult`/`Forget` 后回收（子类不入池）
 - **Awaiter**：实现 `ICriticalNotifyCompletion`（`UnsafeOnCompleted`）
+- **PlayerLoop 时机**：`await Flow.Yield(PlayerLoopTiming.EndOfFrame)`；`NextFrame(timing)`
+- **组合子**：`WhenAnyIndex` / typed `WhenAny`、`Timeout`、`Then` / `ContinueWith`
+- **async Flow**：可写 `async Flow` / `async Flow<T>`（`AsyncFlowMethodBuilder`）
+- **进度**：`Flow.CreateProgress<T>(...)`；`Create((flow, progress) => ...)`
 
 ```csharp
 // 继承后可直接等待
@@ -75,6 +79,15 @@ var (a, b) = await Flow.WhenAll(flowA, flowB, cts.Token);
 yield return Flow.Delay(0.3f, cancellationToken: cts.Token).ToYieldInstruction();
 
 Flow.Delay(1f).Forget(); // fire-and-forget；故障会打日志
+await Flow.Yield(PlayerLoopTiming.EndOfFrame);
+await someFlow.Timeout(2f);
+var winner = await Flow.WhenAnyIndex(flowA, flowB);
+
+// async Flow 方法
+async Flow LoadThenPlay()
+{
+    await Flow.Delay(0.2f);
+}
 
 // 后台线程回到主线程后再碰 Unity API
 await Flow.SwitchToMainThread();

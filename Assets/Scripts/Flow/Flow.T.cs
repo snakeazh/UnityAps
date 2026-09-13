@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using UnityEngine;
 
@@ -8,8 +9,10 @@ namespace CoinFlip.FlowFramework
     /// <summary>
     /// Awaitable flow with a typed result. Inherit and call <see cref="SetResult"/> /
     /// <see cref="SetException"/>, or complete via <see cref="TrySetResult"/>.
+    /// Supports <c>async Flow&lt;T&gt;</c> via <see cref="AsyncFlowMethodBuilder{T}"/>.
     /// </summary>
-    public class Flow<T> : IFlowAwaitable<T>
+    [AsyncMethodBuilder(typeof(AsyncFlowMethodBuilder<>))]
+    public partial class Flow<T> : IFlowAwaitable<T>
     {
         static int s_nextId = 1;
 
