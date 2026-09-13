@@ -25,7 +25,8 @@ namespace CoinFlip.FlowFramework
         T _result;
         Exception _exception;
         Action _continuation;
-        readonly List<Action> _extraContinuations = new List<Action>(0);
+        Action _continuation2;
+        List<Action> _extraContinuations; // allocated only when 3+ waiters
         CancellationTokenRegistration _cancelRegistration;
 
         public Flow()
@@ -49,7 +50,8 @@ namespace CoinFlip.FlowFramework
             _result = default;
             _exception = null;
             _continuation = null;
-            _extraContinuations.Clear();
+            _continuation2 = null;
+            _extraContinuations?.Clear();
             _cancelRegistration = default;
         }
 
@@ -63,7 +65,8 @@ namespace CoinFlip.FlowFramework
             _result = default;
             _exception = null;
             _continuation = null;
-            _extraContinuations.Clear();
+            _extraContinuations?.Clear();
+            _continuation2 = null;
         }
 
         public bool IsCompleted
@@ -127,18 +130,22 @@ namespace CoinFlip.FlowFramework
                 {
                     _continuation = continuation;
                 }
+                else if (_continuation2 == null)
+                {
+                    _continuation2 = continuation;
+                }
                 else
                 {
+                    _extraContinuations ??= new List<Action>(4);
                     _extraContinuations.Add(continuation);
                 }
             }
 
             if (alreadyDone)
             {
-                FlowRunner.Post(continuation);
+                FlowRunner.Schedule(continuation);
             }
         }
-
         public void Forget()
         {
             MarkObserved();
@@ -246,6 +253,8 @@ namespace CoinFlip.FlowFramework
 
         void Complete(T value, Exception exception)
         {
+            exception = Flow.CaptureExceptionStackPublic(exception);
+
             if (!FlowRunner.IsMainThread)
             {
                 FlowRunner.Post(() => Complete(value, exception));
@@ -253,6 +262,7 @@ namespace CoinFlip.FlowFramework
             }
 
             Action first = null;
+            Action second = null;
             Action[] extras = null;
             var reportUnobserved = false;
             lock (_gate)
@@ -266,8 +276,10 @@ namespace CoinFlip.FlowFramework
                 _result = value;
                 _exception = exception;
                 first = _continuation;
+                second = _continuation2;
                 _continuation = null;
-                if (_extraContinuations.Count > 0)
+                _continuation2 = null;
+                if (_extraContinuations != null && _extraContinuations.Count > 0)
                 {
                     extras = _extraContinuations.ToArray();
                     _extraContinuations.Clear();
@@ -276,6 +288,7 @@ namespace CoinFlip.FlowFramework
                 reportUnobserved = exception != null
                     && exception is not OperationCanceledException
                     && first == null
+                    && second == null
                     && extras == null
                     && !_observed;
             }
@@ -284,14 +297,19 @@ namespace CoinFlip.FlowFramework
 
             if (first != null)
             {
-                FlowRunner.Post(first);
+                FlowRunner.Schedule(first);
+            }
+
+            if (second != null)
+            {
+                FlowRunner.Schedule(second);
             }
 
             if (extras != null)
             {
                 for (var i = 0; i < extras.Length; i++)
                 {
-                    FlowRunner.Post(extras[i]);
+                    FlowRunner.Schedule(extras[i]);
                 }
             }
 
@@ -300,7 +318,6 @@ namespace CoinFlip.FlowFramework
                 FlowRunner.Post(ReportUnobservedIfNeeded);
             }
         }
-
         void ReportUnobservedIfNeeded()
         {
             Exception error = null;

@@ -13,6 +13,8 @@ namespace CoinFlip
         /// <summary>Transition out of splash into gameplay.</summary>
         Entering = 3,
         /// <summary>Player may flip the coin.</summary>
-        Playing = 4
+        Playing = 4,
+        /// <summary>Startup step faulted; controller may fail-open into Playing.</summary>
+        Failed = 5
     }
 }

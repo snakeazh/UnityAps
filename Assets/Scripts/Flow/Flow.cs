@@ -26,7 +26,8 @@ namespace CoinFlip.FlowFramework
         bool _returnedToPool;
         Exception _exception;
         Action _continuation;
-        readonly List<Action> _extraContinuations = new List<Action>(0);
+        Action _continuation2;
+        List<Action> _extraContinuations; // allocated only when 3+ waiters
         CancellationTokenRegistration _cancelRegistration;
 
         protected Flow()
@@ -49,7 +50,8 @@ namespace CoinFlip.FlowFramework
             _returnedToPool = false;
             _exception = null;
             _continuation = null;
-            _extraContinuations.Clear();
+            _continuation2 = null;
+            _extraContinuations?.Clear();
             _cancelRegistration = default;
         }
 
@@ -62,7 +64,8 @@ namespace CoinFlip.FlowFramework
             // reference cannot return the same instance twice.
             _exception = null;
             _continuation = null;
-            _extraContinuations.Clear();
+            _continuation2 = null;
+            _extraContinuations?.Clear();
         }
 
         public bool IsCompleted
@@ -126,18 +129,22 @@ namespace CoinFlip.FlowFramework
                 {
                     _continuation = continuation;
                 }
+                else if (_continuation2 == null)
+                {
+                    _continuation2 = continuation;
+                }
                 else
                 {
+                    _extraContinuations ??= new List<Action>(4);
                     _extraContinuations.Add(continuation);
                 }
             }
 
             if (alreadyDone)
             {
-                FlowRunner.Post(continuation);
+                FlowRunner.Schedule(continuation);
             }
         }
-
         /// <summary>
         /// Observe result without awaiting further. Faults are logged; instance may return to pool.
         /// </summary>
@@ -256,6 +263,8 @@ namespace CoinFlip.FlowFramework
 
         void Complete(Exception exception)
         {
+            exception = CaptureExceptionStack(exception);
+
             if (!FlowRunner.IsMainThread)
             {
                 FlowRunner.Post(() => Complete(exception));
@@ -263,6 +272,7 @@ namespace CoinFlip.FlowFramework
             }
 
             Action first = null;
+            Action second = null;
             Action[] extras = null;
             var reportUnobserved = false;
             lock (_gate)
@@ -275,17 +285,19 @@ namespace CoinFlip.FlowFramework
                 _completed = true;
                 _exception = exception;
                 first = _continuation;
+                second = _continuation2;
                 _continuation = null;
-                if (_extraContinuations.Count > 0)
+                _continuation2 = null;
+                if (_extraContinuations != null && _extraContinuations.Count > 0)
                 {
                     extras = _extraContinuations.ToArray();
                     _extraContinuations.Clear();
                 }
 
-                // Fault with nobody waiting yet → check next tick for unobserved exception.
                 reportUnobserved = exception != null
                     && exception is not OperationCanceledException
                     && first == null
+                    && second == null
                     && extras == null
                     && !_observed;
             }
@@ -294,14 +306,19 @@ namespace CoinFlip.FlowFramework
 
             if (first != null)
             {
-                FlowRunner.Post(first);
+                FlowRunner.Schedule(first);
+            }
+
+            if (second != null)
+            {
+                FlowRunner.Schedule(second);
             }
 
             if (extras != null)
             {
                 for (var i = 0; i < extras.Length; i++)
                 {
-                    FlowRunner.Post(extras[i]);
+                    FlowRunner.Schedule(extras[i]);
                 }
             }
 
@@ -311,6 +328,31 @@ namespace CoinFlip.FlowFramework
             }
         }
 
+        internal static Exception CaptureExceptionStackPublic(Exception exception) => CaptureExceptionStack(exception);
+
+        static Exception CaptureExceptionStack(Exception exception)
+        {
+            if (exception == null || exception is OperationCanceledException)
+            {
+                return exception;
+            }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            // Dual stack once: original fault site + where TrySetException/Complete was called.
+            if (exception.Data != null && exception.Data.Contains("FlowStackCaptured"))
+            {
+                return exception;
+            }
+
+            var wrapped = new Exception(
+                exception.Message + "\n--- Flow SetException stack ---\n" + Environment.StackTrace,
+                exception);
+            wrapped.Data["FlowStackCaptured"] = true;
+            return wrapped;
+#else
+            return exception;
+#endif
+        }
         void ReportUnobservedIfNeeded()
         {
             Exception error = null;

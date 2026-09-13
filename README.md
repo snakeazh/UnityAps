@@ -66,6 +66,12 @@ Assets/
 - **组合子**：`WhenAnyIndex` / typed `WhenAny`、`Timeout`、`Then` / `ContinueWith`
 - **async Flow**：可写 `async Flow` / `async Flow<T>`（`AsyncFlowMethodBuilder`）
 - **进度**：`Flow.CreateProgress<T>(...)`；`Create((flow, progress) => ...)`
+- **续体调度**：`FlowRunner.ContinuationScheduling` = `Post`（默认）/ `Run`（主线程内联，少拖一帧）
+- **StartRoutineAsFlow**：非主线程启动协程也可拿到可取消的 `Flow`
+- **单续体优化**：第二等待者走字段，第三起才分配 List
+- **编辑器双重异常栈**：`TrySetException` 附带设置点堆栈
+- **ValueFlow / ValueFlow&lt;T&gt;**：已完成结果的零分配 struct awaitable
+- **WhenAll 生成**：菜单 `CoinFlip/Flow/Regenerate WhenAll (2–16)`
 
 ```csharp
 // 继承后可直接等待
