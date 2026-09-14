@@ -34,20 +34,27 @@ namespace CoinFlip
         /// <summary>
         /// Builds camera / coin / UI / splash. Called by <see cref="GameFlowController"/> during Booting.
         /// </summary>
-        public GameBuildContext Build()
+        public GameBuildContext Build(GameServices services = null)
         {
+            services = services ?? GameServices.Ensure(gameObject);
+
             SetupCamera();
             SetupLights();
             var coin = CreateCoin();
+            coin.ApplyTuning(services.Tuning);
+            coin.BindAudio(services.Audio);
+
             var sparks = gameObject.GetComponent<CoinSparkBurst>() ?? gameObject.AddComponent<CoinSparkBurst>();
             sparks.EnsureBuilt(coin.transform);
 
             var manager = gameObject.GetComponent<GameManager>() ?? gameObject.AddComponent<GameManager>();
             manager.Bind(coin);
+            manager.BindServices(services);
 
-            var canvas = BuildUi(manager, sparks, out var ui, out var splash);
+            var canvas = BuildUi(manager, sparks, services, out var ui, out var splash);
             return new GameBuildContext
             {
+                Services = services,
                 Manager = manager,
                 Ui = ui,
                 Coin = coin,
@@ -187,7 +194,7 @@ namespace CoinFlip
             return mat;
         }
 
-        Canvas BuildUi(GameManager manager, CoinSparkBurst sparks, out GameUI ui, out SplashView splash)
+        Canvas BuildUi(GameManager manager, CoinSparkBurst sparks, GameServices services, out GameUI ui, out SplashView splash)
         {
             EnsureEventSystem();
 
@@ -233,15 +240,17 @@ namespace CoinFlip
             var stats = CreateText(bottom.transform, "Stats", "已抛 0 次  ·  花 0  ·  字 0", 28, FontStyle.Normal, TextAnchor.MiddleCenter, Ink);
             SetAnchors(stats.gameObject, 0.06f, 0.48f, 0.94f, 0.72f);
 
-            var flipBtn = CreateButton(bottom.transform, "FlipButton", "抛一次", Coral, 0.08f, 0.08f, 0.58f, 0.42f);
-            var resetBtn = CreateButton(bottom.transform, "ResetButton", "清零", new Color(0.72f, 0.62f, 0.5f), 0.62f, 0.08f, 0.92f, 0.42f);
+            var flipBtn = CreateButton(bottom.transform, "FlipButton", "抛一次", Coral, 0.08f, 0.08f, 0.48f, 0.42f);
+            var resetBtn = CreateButton(bottom.transform, "ResetButton", "清零", new Color(0.72f, 0.62f, 0.5f), 0.52f, 0.08f, 0.72f, 0.42f);
+            var muteBtn = CreateButton(bottom.transform, "MuteButton", "声音", new Color(0.62f, 0.55f, 0.45f), 0.76f, 0.08f, 0.92f, 0.42f);
 
             // Splash sits on top of gameplay UI and is driven by GameFlowController.
             splash = SplashView.Create(canvasGo.transform);
             splash.transform.SetAsLastSibling();
 
             ui = gameObject.GetComponent<GameUI>() ?? gameObject.AddComponent<GameUI>();
-            ui.Bind(manager, title, slogan, hint, result, reward, stats, flipBtn, resetBtn, sparks);
+            ui.Bind(manager, title, slogan, hint, result, reward, stats, flipBtn, resetBtn, muteBtn, sparks);
+            ui.BindServices(services);
             return canvas;
         }
 

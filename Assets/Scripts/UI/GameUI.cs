@@ -5,7 +5,7 @@ using UnityEngine.UI;
 namespace CoinFlip
 {
     /// <summary>
-    /// Diary-style UI feedback: punch-in result, toss hints, 花/字 labels.
+    /// Diary-style UI feedback: punch-in result, toss hints, 花/字 labels, mute toggle.
     /// </summary>
     public sealed class GameUI : MonoBehaviour
     {
@@ -18,8 +18,10 @@ namespace CoinFlip
         [SerializeField] Text statsText;
         [SerializeField] Button flipButton;
         [SerializeField] Button resetButton;
+        [SerializeField] Button muteButton;
         [SerializeField] CoinSparkBurst sparkBurst;
 
+        GameServices _services;
         Coroutine _resultPunch;
         Coroutine _rewardFloat;
 
@@ -33,6 +35,7 @@ namespace CoinFlip
             Text stats,
             Button flip,
             Button reset,
+            Button mute,
             CoinSparkBurst sparks)
         {
             gameManager = manager;
@@ -44,21 +47,44 @@ namespace CoinFlip
             statsText = stats;
             flipButton = flip;
             resetButton = reset;
+            muteButton = mute;
             sparkBurst = sparks;
             WireEvents();
             Refresh();
+            RefreshMuteLabel();
             ClearResultVisuals();
+        }
+
+        public void BindServices(GameServices services)
+        {
+            if (_services != null && _services.Settings != null)
+            {
+                _services.Settings.MutedChanged -= OnMutedChanged;
+            }
+
+            _services = services;
+            if (_services != null && _services.Settings != null)
+            {
+                _services.Settings.MutedChanged += OnMutedChanged;
+            }
+
+            RefreshMuteLabel();
         }
 
         void OnEnable()
         {
             WireEvents();
             Refresh();
+            RefreshMuteLabel();
         }
 
         void OnDisable()
         {
             UnwireEvents();
+            if (_services != null && _services.Settings != null)
+            {
+                _services.Settings.MutedChanged -= OnMutedChanged;
+            }
         }
 
         void WireEvents()
@@ -81,6 +107,11 @@ namespace CoinFlip
             {
                 resetButton.onClick.AddListener(OnResetClicked);
             }
+
+            if (muteButton != null)
+            {
+                muteButton.onClick.AddListener(OnMuteClicked);
+            }
         }
 
         void UnwireEvents()
@@ -101,6 +132,11 @@ namespace CoinFlip
             if (resetButton != null)
             {
                 resetButton.onClick.RemoveListener(OnResetClicked);
+            }
+
+            if (muteButton != null)
+            {
+                muteButton.onClick.RemoveListener(OnMuteClicked);
             }
         }
 
@@ -131,18 +167,47 @@ namespace CoinFlip
 
         void OnFlipClicked()
         {
+            _services?.Audio?.PlayUiClick();
             gameManager?.TryFlip();
             Refresh();
         }
 
         void OnResetClicked()
         {
+            _services?.Audio?.PlayUiClick();
             gameManager?.ResetStats();
             ClearResultVisuals();
             if (hintText != null)
             {
                 hintText.text = "点一下，碰碰今天的运气";
             }
+        }
+
+        void OnMuteClicked()
+        {
+            _services?.Settings?.ToggleMuted();
+            // Click SFX respects the new mute state (silent when muted).
+            _services?.Audio?.PlayUiClick();
+            RefreshMuteLabel();
+        }
+
+        void OnMutedChanged(bool _) => RefreshMuteLabel();
+
+        void RefreshMuteLabel()
+        {
+            if (muteButton == null)
+            {
+                return;
+            }
+
+            var label = muteButton.GetComponentInChildren<Text>();
+            if (label == null)
+            {
+                return;
+            }
+
+            var muted = _services != null && _services.IsMuted;
+            label.text = muted ? "静音" : "声音";
         }
 
         void OnFlipStarted()
@@ -165,7 +230,6 @@ namespace CoinFlip
 
         void OnFlipResolved(CoinSide side)
         {
-            // Match Chinese 1-yuan coin slang used in casual fortune diaries: 花 / 字.
             var label = side == CoinSide.Heads ? "花" : "字";
             if (resultText != null)
             {
@@ -180,8 +244,10 @@ namespace CoinFlip
 
             if (rewardText != null)
             {
-                var bonus = side == CoinSide.Heads ? "+¥1.88" : "+¥0.88";
-                rewardText.text = bonus;
+                var tuning = _services != null ? _services.Tuning : null;
+                rewardText.text = side == CoinSide.Heads
+                    ? (tuning != null ? tuning.headsRewardText : "+¥1.88")
+                    : (tuning != null ? tuning.tailsRewardText : "+¥0.88");
                 rewardText.color = side == CoinSide.Heads
                     ? new Color(0.86f, 0.45f, 0.12f, 1f)
                     : new Color(0.55f, 0.42f, 0.28f, 1f);
@@ -250,7 +316,6 @@ namespace CoinFlip
             {
                 elapsed += Time.deltaTime;
                 var t = Mathf.Clamp01(elapsed / duration);
-                // Overshoot punch: 0 → 1.25 → 1.
                 var scale = t < 0.55f
                     ? Mathf.Lerp(0f, 1.28f, t / 0.55f)
                     : Mathf.Lerp(1.28f, 1f, (t - 0.55f) / 0.45f);

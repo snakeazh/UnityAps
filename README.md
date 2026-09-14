@@ -15,15 +15,18 @@
 
 1. 安装 [Unity Hub](https://unity.com/download) 与 **Unity 2022.3.62f3**（勾选 **Android Build Support**）
 2. 用 Hub **打开本仓库根目录**
-3. 打开 `Assets/Scenes/Main.unity` → Play
+3. 打开 `Assets/Scenes/Boot.unity` → Play（空启动场景会异步切到 `Main`）
+
+菜单 `CoinFlip/Setup Boot Scene` / `Setup Main Scene` 可重建场景，并写入 Build Settings（Boot 为 index 0）。
 
 ## Android 构建
 
 | 菜单 | 作用 |
 |------|------|
-| `CoinFlip / Configure Android Player Settings` | 包名、竖屏、IL2CPP、ARM、MinSDK 23 / TargetSDK 34 |
-| `CoinFlip / Build Android APK (Development)` | 输出 `Builds/Android/CoinFlip.apk` |
+| `CoinFlip / Setup Boot Scene` | 生成空启动场景并写入 Build Settings（index 0） |
 | `CoinFlip / Setup Main Scene` | 重新生成 Main 场景 |
+| `CoinFlip / Configure Android Player Settings` | 包名、竖屏、IL2CPP、ARM、MinSDK 23 / TargetSDK 34 |
+| `CoinFlip / Build Android APK (Development)` | 输出 `Builds/Android/CoinFlip.apk`（含 Boot+Main） |
 
 - 产品名：`CoinFlip`
 - 包名：`com.unityaps.coinflip`
@@ -33,7 +36,21 @@
 
 ```
 Assets/
-  Scenes/Main.unity
+  Scenes/
+    Boot.unity                  # 空启动场景（index 0）→ 异步加载 Main
+    Main.unity                  # 玩法场景
+  Res/                          # 唯一可加载资源根（YooAsset 收集目录）
+    AddressCatalog.asset
+    ResourceSettings.asset      # PlayMode / PackRule / 首包 / CDN / 加密
+    FirstPackageManifest.asset
+    GameTuning.asset
+  Scripts/Framework/            # 轻量 App 服务层
+    Assets/                     # 异步资源运行时（Facade + Strategy + FS）
+    GameServices.cs             # 组合根（非 DI）
+    GameTuning.cs               # ScriptableObject 调参
+    GameSettings.cs             # 静音 / 震动开关（PlayerPrefs）
+    AudioService.cs             # SFX（尊重静音；空 clip 空操作）
+    AppLifecycle.cs             # 前后台暂停门闩
   Scripts/Flow/                 # 自研可等待 Promise 框架
     Flow.cs / Flow.T.cs         # Flow / Flow<T>（可继承）
     StateMachine/               # FlowStateMachine + Host
@@ -41,12 +58,14 @@ Assets/
     FlowAwaiter.cs / FlowRunner.cs
     Examples/SplashCoverFlow.cs # 继承 Flow 的示例
   Scripts/Gameplay/
+    BootSceneLoader.cs          # Boot → 初始化/首包后按 location 进 Main
     GameFlowController.cs       # 启动 FSM：Booting → … → Playing
     GameManager.cs              # 对局 FSM：Idle ⇄ Flipping
     MatchState.cs / GameFlowState.cs / SplashView.cs / GameBootstrap.cs
     CoinController.cs / CoinSparkBurst.cs
   Scripts/UI/GameUI.cs
   Editor/CoinFlipEditorMenu.cs
+  Editor/Assets/                # Resource 菜单 + AssetBundleBuild 流水线
 ```
 
 ## Flow 框架（带返回值的可等待）
@@ -93,6 +112,14 @@ if (fsm.CanFire(GameFlowTrigger.ForcePlay))
     await fsm.TryFireAsync(GameFlowTrigger.ForcePlay);
 ```
 
+## 场景过渡（Boot → Main）
+
+应用从空场景 `Boot` 启动：`BootSceneLoader` 先 `GameAssets.EnsureInitializedAsync`，再按 **location**（默认 `Main`）`LoadSceneAsync`。
+
+- Build Settings 顺序：`Boot`（0）→ `Main`（1）
+- 玩法 Splash / FSM 仍在 `Main` 内由 `GameFlowController` 驱动
+- 目标 location / 包名可在 Boot 场景的 `BootSceneLoader` 上改
+
 ## 启动流程
 
 由 `GameFlowController` + `FlowStateMachine` 驱动（自动推进）：
@@ -107,8 +134,90 @@ if (fsm.CanFire(GameFlowTrigger.ForcePlay))
 
 `Idle` —Flip→ `Flipping`（OnEnter：`coin.TryFlip` + 等待落地）—AutoAdvance→ `Idle`
 
-Busy 时 Ignore；Enter 故障 GoTo `Idle`。`CanAcceptGameplayInput` 同时要求启动态 Playing 与对局 Idle。
+Busy 时 Ignore；Enter 故障 GoTo `Idle`。`CanAcceptGameplayInput` 同时要求启动态 Playing、对局 Idle，且 App 未暂停。
+
+## 资源管理（异步运行时）
+
+门面 `GameAssets`（Facade）对齐 [YooAsset](https://www.yooasset.com/docs/guide-runtime/ResourceLoad) 调用习惯；实现按 Strategy / Factory / Template Method / Observer / Builder 分层。
+
+```csharp
+await GameAssets.EnsureInitializedAsync("DefaultPackage");
+await GameAssets.PreloadFirstPackageAsync();
+var handle = GameAssets.LoadAssetAsync<GameTuning>("GameTuning");
+await handle;
+var tuning = handle.GetAssetObject<GameTuning>();
+handle.Release();
+
+await GameAssets.LoadSceneAsync("Main");
+```
+
+编辑器菜单：`Resource Settings` / `Rebuild Address Catalog` / `Collect First Package` / `Build AssetBundles`（`AssetBundleBuild[]` 分组打包，首包进 StreamingAssets）/ `Build Resource Version Only`（只发 version）/ `Resource Version Publish Panel`（独立版本面板，支持自动 bump + Uploader）。
+
+PlayMode：`EditorSimulateMode`（AssetDatabase）、`OfflinePlayMode`（本地 AB）、`HostPlayMode`（先读 `latest.json` 再进 `{version}/`，兼容扁平 `version.json`；多平台 `IBundleFileSystem`）。只加载 `Assets/Res`；公共 API 仅异步。Boot：初始化 →（Host）更新 → 首包预载 → 加载 Main。打 Android APK 前自动 Build AssetBundles。Player 侧通过 `StreamingAssets/Bundles/bootstrap.json` 恢复地址表与配置（无需 Resources）。
+
+### CDN 布局 B（本地导出 + CI sync）
+
+发布输出默认在 `Publish/cdn/`（不内置 OSS/COS SDK）：
+
+```
+Publish/cdn/
+  latest.json          # { "version":"1.0.1", "path":"1.0.1", ... }
+  1.0.0/
+    version.json
+    *.bundle
+  1.0.1/
+    version.json
+    *.bundle
+```
+
+`ResourceSettings.remoteRootUrl` 填 CDN **根**（含 `latest.json` 的那一层）。Host 运行时先拉 `latest.json`，再下载 `{path}/version.json` 与 bundle。
+
+自定义上传：继承 `ResourceVersionUploaderBase`，打上 `[ResourceVersionUploader("显示名")]`，实现上传逻辑；面板通过 `TypeCache` 只发现带特性的具体类型。
+
+```csharp
+[ResourceVersionUploader("My COS Uploader", order: 10)]
+public sealed class CosResourceVersionUploader : ResourceVersionUploaderBase
+{
+    public override string DisplayName => "My COS Uploader";
+
+    protected override bool UploadVersionFiles(ResourceVersionUploadContext context, out string error)
+    {
+        // sync context.LocalVersionDir → your CDN/{version}/
+        error = null;
+        return true;
+    }
+
+    protected override bool UploadLatest(ResourceVersionUploadContext context, out string error)
+    {
+        // sync context.LatestJsonPath → CDN/latest.json
+        error = null;
+        return true;
+    }
+}
+```
+
+默认 `Local Export (CI sync)` 只校验本地目录。CI 示例：
+
+```bash
+# 将 Publish/cdn 同步到对象存储（任选其一）
+aws s3 sync Publish/cdn s3://your-bucket/coinflip/ --delete
+# 或 coscli sync Publish/cdn cos://bucket/coinflip/
+```
+
+## App 服务层
+
+Booting 时 `GameServices.EnsureAsync` 挂到根物体，经 `GameBuildContext` 分发：
+
+| 服务 | 职责 |
+|------|------|
+| `GameTuning` | Splash/淡出/抛币手感/奖励文案/SFX；`ResolveOrDefaultAsync` 异步加载 |
+| `GameSettings` | `Muted`、`HapticsEnabled`（预留）独立 PlayerPrefs |
+| `AudioService` | `PlayToss` / `PlayLand` / `PlayUiClick`；静音或空 clip 时 no-op |
+| `AppLifecycle` | `OnApplicationPause` / `Focus` → `IsPaused`；**不**改 `timeScale`，不取消飞行中抛币 |
+
+HUD「声音」按钮切换静音。暂停时只锁新输入（`TryFlip` 返回 false）。
 
 ## 说明
 
-不含 `Library/`。请使用与 `ProjectSettings/ProjectVersion.txt` 一致的编辑器版本。
+不含 `Library/`。请使用与 `ProjectSettings/ProjectVersion.txt` 一致的编辑器版本。  
+本环境无 Unity Editor，未做 Play Mode 实机验证；请在编辑器中点验：从 `Boot` Play 能进 `Main`、Booting 后 Services 非空、静音后无 SFX、切后台再回前台时抛币按钮锁定/恢复。

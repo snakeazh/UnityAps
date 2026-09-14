@@ -45,3 +45,6 @@ local.properties
 
 # Crashlytics
 crashlytics-build.properties
+Bundles/
+!Bundles/.gitkeep
+Publish/

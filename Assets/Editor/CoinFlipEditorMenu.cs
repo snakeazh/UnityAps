@@ -13,9 +13,39 @@ namespace CoinFlip.EditorTools
     /// </summary>
     public static class CoinFlipEditorMenu
     {
-        const string ScenePath = "Assets/Scenes/Main.unity";
+        const string BootScenePath = "Assets/Scenes/Boot.unity";
+        const string MainScenePath = "Assets/Scenes/Main.unity";
 
-        [MenuItem("CoinFlip/Setup Main Scene", priority = 0)]
+        [MenuItem("CoinFlip/Setup Boot Scene", priority = 0)]
+        public static void SetupBootScene()
+        {
+            Directory.CreateDirectory("Assets/Scenes");
+
+            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+
+            var camGo = new GameObject("Main Camera");
+            camGo.tag = "MainCamera";
+            var cam = camGo.AddComponent<Camera>();
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = new Color(0.97f, 0.93f, 0.84f);
+            cam.orthographic = true;
+            camGo.AddComponent<AudioListener>();
+
+            var loaderGo = new GameObject("BootSceneLoader");
+            var loader = loaderGo.AddComponent<BootSceneLoader>();
+            var so = new SerializedObject(loader);
+            so.FindProperty("packageName").stringValue = "DefaultPackage";
+            so.FindProperty("targetSceneName").stringValue = "Main";
+            so.FindProperty("minHoldSeconds").floatValue = 0.05f;
+            so.ApplyModifiedPropertiesWithoutUndo();
+
+            EditorSceneManager.SaveScene(scene, BootScenePath);
+            EnsureBuildSettings();
+            AssetDatabase.SaveAssets();
+            Debug.Log("Boot scene created at " + BootScenePath + " (loads Main asynchronously).");
+        }
+
+        [MenuItem("CoinFlip/Setup Main Scene", priority = 1)]
         public static void SetupMainScene()
         {
             Directory.CreateDirectory("Assets/Scenes");
@@ -32,13 +62,13 @@ namespace CoinFlip.EditorTools
                 cam.backgroundColor = new Color(0.97f, 0.93f, 0.84f);
             }
 
-            EditorSceneManager.SaveScene(scene, ScenePath);
-            EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
+            EditorSceneManager.SaveScene(scene, MainScenePath);
+            EnsureBuildSettings();
             AssetDatabase.SaveAssets();
-            Debug.Log("Main scene created at " + ScenePath);
+            Debug.Log("Main scene created at " + MainScenePath);
         }
 
-        [MenuItem("CoinFlip/Configure Android Player Settings", priority = 1)]
+        [MenuItem("CoinFlip/Configure Android Player Settings", priority = 2)]
         public static void ConfigureAndroid()
         {
             PlayerSettings.companyName = "UnityAps";
@@ -59,20 +89,36 @@ namespace CoinFlip.EditorTools
             Debug.Log("Android player settings applied. Active build target: Android.");
         }
 
-        [MenuItem("CoinFlip/Build Android APK (Development)", priority = 2)]
+        [MenuItem("CoinFlip/Build Android APK (Development)", priority = 3)]
         public static void BuildAndroidApk()
         {
             ConfigureAndroid();
-            if (!File.Exists(ScenePath))
+            if (!File.Exists(BootScenePath))
+            {
+                SetupBootScene();
+            }
+
+            if (!File.Exists(MainScenePath))
             {
                 SetupMainScene();
             }
+
+            EnsureBuildSettings();
+
+            // Build AssetBundles (AssetBundleBuild grouping) + copy first package before Player.
+            var settings = ResourceEditorMenu.LoadOrCreateSettings();
+            new AssetBundleBuildPipeline(settings)
+                .CollectAndAssign()
+                .WriteCatalog()
+                .WriteFirstPackageManifest()
+                .BuildBundles(BuildTarget.Android)
+                .CopyFirstPackageToStreaming(BuildTarget.Android);
 
             Directory.CreateDirectory("Builds/Android");
             var apkPath = "Builds/Android/CoinFlip.apk";
             var options = new BuildPlayerOptions
             {
-                scenes = new[] { ScenePath },
+                scenes = new[] { BootScenePath, MainScenePath },
                 locationPathName = apkPath,
                 target = BuildTarget.Android,
                 options = BuildOptions.Development
@@ -80,6 +126,17 @@ namespace CoinFlip.EditorTools
 
             BuildReport report = BuildPipeline.BuildPlayer(options);
             Debug.Log($"Android build result: {report.summary.result} → {apkPath}");
+        }
+
+        static void EnsureBuildSettings()
+        {
+            var bootGuid = AssetDatabase.AssetPathToGUID(BootScenePath);
+            var mainGuid = AssetDatabase.AssetPathToGUID(MainScenePath);
+            EditorBuildSettings.scenes = new[]
+            {
+                new EditorBuildSettingsScene(BootScenePath, !string.IsNullOrEmpty(bootGuid) || File.Exists(BootScenePath)),
+                new EditorBuildSettingsScene(MainScenePath, !string.IsNullOrEmpty(mainGuid) || File.Exists(MainScenePath))
+            };
         }
     }
 }

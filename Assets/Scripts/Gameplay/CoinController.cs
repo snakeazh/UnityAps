@@ -20,6 +20,7 @@ namespace CoinFlip
         [SerializeField] float landSquash = 0.18f;
         [SerializeField] float bounceHeight = 0.55f;
 
+        AudioService _audio;
         Vector3 _restPosition;
         Vector3 _restScale;
         Quaternion _restRotation;
@@ -40,6 +41,26 @@ namespace CoinFlip
             ApplySideRotation(CurrentSide);
         }
 
+        public void ApplyTuning(GameTuning tuning)
+        {
+            if (tuning == null)
+            {
+                return;
+            }
+
+            anticipation = tuning.anticipation;
+            flightDuration = tuning.flightDuration;
+            bounceDuration = tuning.bounceDuration;
+            settleDuration = tuning.settleDuration;
+            flipHeight = tuning.flipHeight;
+            minSpins = tuning.minSpins;
+            maxSpins = tuning.maxSpins;
+            landSquash = tuning.landSquash;
+            bounceHeight = tuning.bounceHeight;
+        }
+
+        public void BindAudio(AudioService audio) => _audio = audio;
+
         public bool TryFlip(CoinSide? forcedSide = null)
         {
             if (_isFlipping)
@@ -56,12 +77,11 @@ namespace CoinFlip
         {
             _isFlipping = true;
             FlipStarted?.Invoke();
+            _audio?.PlayToss();
 
             var spins = UnityEngine.Random.Range(minSpins, maxSpins + 1);
-            // Extra half-turn when landing on tails (mesh: heads = 0°, tails = 180° around X).
             var totalDegrees = spins * 360f + (result == CoinSide.Tails ? 180f : 0f);
 
-            // 1) Anticipation: slight dip + squash before launch.
             yield return Animate(anticipation, t =>
             {
                 var ease = EaseOutQuad(t);
@@ -69,21 +89,17 @@ namespace CoinFlip
                 transform.localScale = SquashScale(1f + landSquash * 0.6f * ease, 1f - landSquash * ease);
             });
 
-            // 2) Flight: high arc + continuous spin (ease-out spin so it "reads" at the end).
             var flightElapsed = 0f;
             while (flightElapsed < flightDuration)
             {
                 flightElapsed += Time.deltaTime;
                 var t = Mathf.Clamp01(flightElapsed / flightDuration);
                 var height = Mathf.Sin(EaseOutCubic(t) * Mathf.PI) * flipHeight;
-                // Slight forward drift so it feels thrown, not teleported.
                 var zDrift = Mathf.Sin(t * Mathf.PI) * 0.18f;
-                var spinT = EaseOutCubic(t);
-                var angle = totalDegrees * spinT;
+                var angle = totalDegrees * EaseOutCubic(t);
 
                 transform.localPosition = _restPosition + new Vector3(0f, height, zDrift);
                 transform.localRotation = Quaternion.Euler(angle, Mathf.Sin(t * Mathf.PI * 2f) * 8f, 0f);
-                // Stretch while rising, compress while falling.
                 var stretch = 1f + Mathf.Sin(t * Mathf.PI) * 0.12f;
                 transform.localScale = SquashScale(1f / stretch, stretch);
                 yield return null;
@@ -92,12 +108,11 @@ namespace CoinFlip
             CurrentSide = result;
             ApplySideRotation(result);
             Landed?.Invoke();
+            _audio?.PlayLand();
 
-            // 3) Bounce land: two decreasing bounces with squash.
             yield return BounceOnce(bounceHeight, bounceDuration * 0.55f, totalDegrees);
             yield return BounceOnce(bounceHeight * 0.35f, bounceDuration * 0.45f, totalDegrees);
 
-            // 4) Settle wobble.
             yield return Animate(settleDuration, t =>
             {
                 var damp = 1f - EaseOutQuad(t);
@@ -123,7 +138,6 @@ namespace CoinFlip
                 elapsed += Time.deltaTime;
                 var t = Mathf.Clamp01(elapsed / duration);
                 var h = Mathf.Sin(t * Mathf.PI) * height;
-                // Squash hardest at contact (t near 0 and 1).
                 var contact = 1f - Mathf.Sin(t * Mathf.PI);
                 transform.localPosition = _restPosition + Vector3.up * h;
                 transform.localRotation = Quaternion.Euler(finalAngle, 0f, 0f);
@@ -145,10 +159,8 @@ namespace CoinFlip
             onStep(1f);
         }
 
-        Vector3 SquashScale(float xz, float y)
-        {
-            return new Vector3(_restScale.x * xz, _restScale.y * y, _restScale.z * xz);
-        }
+        Vector3 SquashScale(float xz, float y) =>
+            new Vector3(_restScale.x * xz, _restScale.y * y, _restScale.z * xz);
 
         void ApplySideRotation(CoinSide side)
         {
@@ -168,6 +180,7 @@ namespace CoinFlip
         }
 
         static float EaseOutQuad(float t) => 1f - (1f - t) * (1f - t);
+
         static float EaseOutCubic(float t)
         {
             var u = 1f - t;
