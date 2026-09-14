@@ -1,0 +1,44 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b5530cd4eb0b485cbfeae66ba17db5a5, type: 3}
+  m_Name: ResourceSettings
+  m_EditorClassIdentifier: 
+  editorPlayMode: 0
+  runtimePlayMode: 1
+  catalogAssetPath: Assets/Res/AddressCatalog.asset
+  firstPackageManifestPath: Assets/Res/FirstPackageManifest.asset
+  collectRoot: Assets/Res
+  bundleOutputRoot: Bundles
+  streamingBundleRoot: Assets/StreamingAssets/Bundles
+  firstPackageTags: first
+  buildinCopyOption: 2
+  remoteRootUrl: 
+  packageVersion: 1.0.0
+  downloadRetryCount: 3
+  downloadTimeoutSeconds: 30
+  cacheRoot: BundleCache
+  platformRemoteUrls: []
+  enableEncryption: 0
+  decryptionType: 0
+  encryptionOffset: 32
+  xorKey: 90
+  groups:
+  - groupName: Default
+    assetTags: first
+    collectors:
+    - collectPath: Assets/Res
+      collectorType: 0
+      packRule: 1
+      addressRule: 0
+      assetTags: first
+      groupBundleName: 
+      includeInFirstPackage: 1

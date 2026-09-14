@@ -34,6 +34,7 @@ namespace CoinFlip.EditorTools
             var loaderGo = new GameObject("BootSceneLoader");
             var loader = loaderGo.AddComponent<BootSceneLoader>();
             var so = new SerializedObject(loader);
+            so.FindProperty("packageName").stringValue = "DefaultPackage";
             so.FindProperty("targetSceneName").stringValue = "Main";
             so.FindProperty("minHoldSeconds").floatValue = 0.05f;
             so.ApplyModifiedPropertiesWithoutUndo();
@@ -103,6 +104,16 @@ namespace CoinFlip.EditorTools
             }
 
             EnsureBuildSettings();
+
+            // Build AssetBundles (AssetBundleBuild grouping) + copy first package before Player.
+            var settings = ResourceEditorMenu.LoadOrCreateSettings();
+            new AssetBundleBuildPipeline(settings)
+                .CollectAndAssign()
+                .WriteCatalog()
+                .WriteFirstPackageManifest()
+                .BuildBundles(BuildTarget.Android)
+                .CopyFirstPackageToStreaming(BuildTarget.Android);
+
             Directory.CreateDirectory("Builds/Android");
             var apkPath = "Builds/Android/CoinFlip.apk";
             var options = new BuildPlayerOptions
