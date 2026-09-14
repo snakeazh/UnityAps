@@ -48,6 +48,10 @@ namespace CoinFlip.EditorTools
                 .WriteFirstPackageManifest()
                 .BuildBundles(target)
                 .CopyFirstPackageToStreaming(target);
+
+            var cdnRoot = EditorPrefs.GetString("CoinFlip.ResourceVersion.CdnRoot", "Publish/cdn");
+            var output = Path.Combine(settings.bundleOutputRoot, target.ToString()).Replace("\\", "/");
+            AssetBundleBuildPipeline.ExportCdnLayout(output, cdnRoot, settings.packageVersion, activateLatest: true);
         }
 
         [MenuItem("CoinFlip/Build Resource Version Only", priority = 24)]
@@ -65,11 +69,33 @@ namespace CoinFlip.EditorTools
             AssetDatabase.SaveAssets();
 
             var target = EditorUserBuildSettings.activeBuildTarget;
-            var exportRoot = EditorPrefs.GetString("CoinFlip.ResourceVersion.ExportRoot", "Publish/ResourceVersions");
+            var cdnRoot = EditorPrefs.GetString("CoinFlip.ResourceVersion.CdnRoot", "Publish/cdn");
             var copyStreaming = EditorPrefs.GetBool("CoinFlip.ResourceVersion.CopyStreaming", true);
+            var activateLatest = EditorPrefs.GetBool("CoinFlip.ResourceVersion.ActivateLatest", true);
+
             new AssetBundleBuildPipeline(settings)
-                .PublishVersionOnly(target, copyStreaming, exportRoot);
-            Debug.Log($"[Resource] Version-only publish complete: v{settings.packageVersion}");
+                .PublishVersionOnly(target, copyStreaming, exportRoot: null);
+            var output = Path.Combine(settings.bundleOutputRoot, target.ToString()).Replace("\\", "/");
+            var versionDir = AssetBundleBuildPipeline.ExportCdnLayout(
+                output, cdnRoot, settings.packageVersion, activateLatest);
+
+            var uploader = new LocalExportResourceVersionUploader();
+            uploader.Upload(new ResourceVersionUploadContext
+            {
+                Version = settings.packageVersion,
+                LocalCdnRoot = cdnRoot,
+                LocalVersionDir = versionDir,
+                LatestJsonPath = Path.Combine(cdnRoot, LatestManifest.FileName).Replace("\\", "/"),
+                ActivateLatest = activateLatest,
+                BuildTarget = target
+            }, out var error);
+
+            if (!string.IsNullOrEmpty(error))
+            {
+                Debug.LogWarning("[Resource] Local export check: " + error);
+            }
+
+            Debug.Log($"[Resource] Version-only publish complete: v{settings.packageVersion} cdn={versionDir}");
         }
 
         public static ResourceSettings LoadOrCreateSettings()

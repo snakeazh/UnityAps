@@ -151,9 +151,58 @@ handle.Release();
 await GameAssets.LoadSceneAsync("Main");
 ```
 
-编辑器菜单：`Resource Settings` / `Rebuild Address Catalog` / `Collect First Package` / `Build AssetBundles`（`AssetBundleBuild[]` 分组打包，首包进 StreamingAssets）/ `Build Resource Version Only`（只发 version）/ `Resource Version Publish Panel`（独立版本面板，支持自动 bump）。
+编辑器菜单：`Resource Settings` / `Rebuild Address Catalog` / `Collect First Package` / `Build AssetBundles`（`AssetBundleBuild[]` 分组打包，首包进 StreamingAssets）/ `Build Resource Version Only`（只发 version）/ `Resource Version Publish Panel`（独立版本面板，支持自动 bump + Uploader）。
 
-PlayMode：`EditorSimulateMode`（AssetDatabase）、`OfflinePlayMode`（本地 AB）、`HostPlayMode`（version.json + 远端下载，多平台 `IBundleFileSystem`）。只加载 `Assets/Res`；公共 API 仅异步。Boot：初始化 →（Host）更新 → 首包预载 → 加载 Main。打 Android APK 前自动 Build AssetBundles。Player 侧通过 `StreamingAssets/Bundles/bootstrap.json` 恢复地址表与配置（无需 Resources）。
+PlayMode：`EditorSimulateMode`（AssetDatabase）、`OfflinePlayMode`（本地 AB）、`HostPlayMode`（先读 `latest.json` 再进 `{version}/`，兼容扁平 `version.json`；多平台 `IBundleFileSystem`）。只加载 `Assets/Res`；公共 API 仅异步。Boot：初始化 →（Host）更新 → 首包预载 → 加载 Main。打 Android APK 前自动 Build AssetBundles。Player 侧通过 `StreamingAssets/Bundles/bootstrap.json` 恢复地址表与配置（无需 Resources）。
+
+### CDN 布局 B（本地导出 + CI sync）
+
+发布输出默认在 `Publish/cdn/`（不内置 OSS/COS SDK）：
+
+```
+Publish/cdn/
+  latest.json          # { "version":"1.0.1", "path":"1.0.1", ... }
+  1.0.0/
+    version.json
+    *.bundle
+  1.0.1/
+    version.json
+    *.bundle
+```
+
+`ResourceSettings.remoteRootUrl` 填 CDN **根**（含 `latest.json` 的那一层）。Host 运行时先拉 `latest.json`，再下载 `{path}/version.json` 与 bundle。
+
+自定义上传：继承 `ResourceVersionUploaderBase`，打上 `[ResourceVersionUploader("显示名")]`，实现上传逻辑；面板通过 `TypeCache` 只发现带特性的具体类型。
+
+```csharp
+[ResourceVersionUploader("My COS Uploader", order: 10)]
+public sealed class CosResourceVersionUploader : ResourceVersionUploaderBase
+{
+    public override string DisplayName => "My COS Uploader";
+
+    protected override bool UploadVersionFiles(ResourceVersionUploadContext context, out string error)
+    {
+        // sync context.LocalVersionDir → your CDN/{version}/
+        error = null;
+        return true;
+    }
+
+    protected override bool UploadLatest(ResourceVersionUploadContext context, out string error)
+    {
+        // sync context.LatestJsonPath → CDN/latest.json
+        error = null;
+        return true;
+    }
+}
+```
+
+默认 `Local Export (CI sync)` 只校验本地目录。CI 示例：
+
+```bash
+# 将 Publish/cdn 同步到对象存储（任选其一）
+aws s3 sync Publish/cdn s3://your-bucket/coinflip/ --delete
+# 或 coscli sync Publish/cdn cos://bucket/coinflip/
+```
 
 ## App 服务层
 

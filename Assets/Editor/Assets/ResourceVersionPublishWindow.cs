@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using System;
+using System.Collections.Generic;
 using System.IO;
 using CoinFlip.Assets;
 using UnityEditor;
@@ -7,30 +8,43 @@ using UnityEngine;
 
 namespace CoinFlip.EditorTools
 {
-    /// <summary>Independent resource version publish panel.</summary>
+    /// <summary>
+    /// Independent resource version publish panel.
+    /// CDN layout B: {cdnRoot}/{version}/ + latest.json; upload via attributed Uploader.
+    /// </summary>
     public sealed class ResourceVersionPublishWindow : EditorWindow
     {
         const string PrefBump = "CoinFlip.ResourceVersion.Bump";
         const string PrefAutoBump = "CoinFlip.ResourceVersion.AutoBump";
         const string PrefCopyStreaming = "CoinFlip.ResourceVersion.CopyStreaming";
-        const string PrefExportRoot = "CoinFlip.ResourceVersion.ExportRoot";
+        const string PrefCdnRoot = "CoinFlip.ResourceVersion.CdnRoot";
         const string PrefCustomVersion = "CoinFlip.ResourceVersion.CustomVersion";
+        const string PrefActivateLatest = "CoinFlip.ResourceVersion.ActivateLatest";
+        const string PrefRunUpload = "CoinFlip.ResourceVersion.RunUpload";
+        const string PrefUploader = "CoinFlip.ResourceVersion.UploaderType";
 
         ResourceSettings _settings;
         EVersionBump _bump = EVersionBump.Patch;
         bool _autoBump = true;
         bool _copyToStreaming = true;
         bool _alsoRebuildBundles;
-        string _exportRoot = "Publish/ResourceVersions";
+        bool _activateLatest = true;
+        bool _runUpload = true;
+        string _cdnRoot = "Publish/cdn";
         string _customVersion = string.Empty;
         Vector2 _scroll;
         string _status = string.Empty;
+
+        List<ResourceVersionUploaderRegistry.Entry> _uploaders =
+            new List<ResourceVersionUploaderRegistry.Entry>();
+        string[] _uploaderLabels = Array.Empty<string>();
+        int _uploaderIndex;
 
         [MenuItem("CoinFlip/Resource Version Publish Panel", priority = 25)]
         public static void Open()
         {
             var window = GetWindow<ResourceVersionPublishWindow>("Resource Version");
-            window.minSize = new Vector2(420, 460);
+            window.minSize = new Vector2(440, 560);
             window.Show();
         }
 
@@ -40,8 +54,36 @@ namespace CoinFlip.EditorTools
             _bump = (EVersionBump)EditorPrefs.GetInt(PrefBump, (int)EVersionBump.Patch);
             _autoBump = EditorPrefs.GetBool(PrefAutoBump, true);
             _copyToStreaming = EditorPrefs.GetBool(PrefCopyStreaming, true);
-            _exportRoot = EditorPrefs.GetString(PrefExportRoot, "Publish/ResourceVersions");
+            _cdnRoot = EditorPrefs.GetString(PrefCdnRoot, "Publish/cdn");
             _customVersion = EditorPrefs.GetString(PrefCustomVersion, string.Empty);
+            _activateLatest = EditorPrefs.GetBool(PrefActivateLatest, true);
+            _runUpload = EditorPrefs.GetBool(PrefRunUpload, true);
+            RefreshUploaders();
+        }
+
+        void RefreshUploaders()
+        {
+            _uploaders = ResourceVersionUploaderRegistry.Discover();
+            _uploaderLabels = new string[_uploaders.Count];
+            for (var i = 0; i < _uploaders.Count; i++)
+            {
+                _uploaderLabels[i] = _uploaders[i].DisplayName;
+            }
+
+            var saved = EditorPrefs.GetString(PrefUploader, string.Empty);
+            _uploaderIndex = 0;
+            if (!string.IsNullOrEmpty(saved))
+            {
+                for (var i = 0; i < _uploaders.Count; i++)
+                {
+                    if (_uploaders[i].Type != null &&
+                        string.Equals(_uploaders[i].Type.FullName, saved, StringComparison.Ordinal))
+                    {
+                        _uploaderIndex = i;
+                        break;
+                    }
+                }
+            }
         }
 
         void OnGUI()
@@ -55,7 +97,8 @@ namespace CoinFlip.EditorTools
 
             EditorGUILayout.LabelField("资源版本发布", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "可只刷新 version.json / bootstrap 并导出发布包，或连同 AssetBundle 一起构建。",
+                "布局 B：本地导出 Publish/cdn/{version}/ + latest.json。\n" +
+                "上传通过继承 ResourceVersionUploaderBase + [ResourceVersionUploader] 特性发现；默认仅校验本地导出，由 CI sync 到 CDN。",
                 MessageType.Info);
 
             using (new EditorGUI.DisabledScope(true))
@@ -86,23 +129,52 @@ namespace CoinFlip.EditorTools
             }
 
             EditorGUILayout.Space(8);
-            EditorGUILayout.LabelField("发布选项", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("CDN 导出", EditorStyles.boldLabel);
+            _cdnRoot = EditorGUILayout.TextField("CDN Root（本地）", _cdnRoot);
+            _activateLatest = EditorGUILayout.ToggleLeft("导出后写入/激活 latest.json", _activateLatest);
             _copyToStreaming = EditorGUILayout.ToggleLeft("拷贝 version/bootstrap 到 StreamingAssets", _copyToStreaming);
             _alsoRebuildBundles = EditorGUILayout.ToggleLeft("同时完整重建 AssetBundles", _alsoRebuildBundles);
-            _exportRoot = EditorGUILayout.TextField("导出版本目录", _exportRoot);
-            EditorGUILayout.LabelField(
-                "目标平台",
-                EditorUserBuildSettings.activeBuildTarget.ToString());
+            EditorGUILayout.LabelField("目标平台", EditorUserBuildSettings.activeBuildTarget.ToString());
+            EditorGUILayout.SelectableLabel(
+                $"{_cdnRoot}/latest.json\n{_cdnRoot}/{preview}/version.json\n{_cdnRoot}/{preview}/*.bundle",
+                EditorStyles.helpBox,
+                GUILayout.Height(54));
+
+            EditorGUILayout.Space(8);
+            EditorGUILayout.LabelField("上传（Uploader）", EditorStyles.boldLabel);
+            if (_uploaderLabels.Length == 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "未发现 Uploader。请继承 ResourceVersionUploaderBase 并添加 [ResourceVersionUploader]。",
+                    MessageType.Warning);
+            }
+            else
+            {
+                EditorGUILayout.BeginHorizontal();
+                _uploaderIndex = EditorGUILayout.Popup("Uploader", _uploaderIndex, _uploaderLabels);
+                if (GUILayout.Button("↻", GUILayout.Width(28)))
+                {
+                    RefreshUploaders();
+                }
+
+                EditorGUILayout.EndHorizontal();
+                _runUpload = EditorGUILayout.ToggleLeft("导出后执行选中 Uploader", _runUpload);
+            }
+
+            if (GUILayout.Button("刷新 Uploader 列表"))
+            {
+                RefreshUploaders();
+            }
 
             EditorGUILayout.Space(12);
             using (new EditorGUILayout.HorizontalScope())
             {
-                if (GUILayout.Button("只构建/发布资源版本", GUILayout.Height(32)))
+                if (GUILayout.Button("只发布资源版本", GUILayout.Height(32)))
                 {
                     Publish(versionOnly: true);
                 }
 
-                if (GUILayout.Button("完整构建 AB + 发布版本", GUILayout.Height(32)))
+                if (GUILayout.Button("完整构建 AB + 发布", GUILayout.Height(32)))
                 {
                     Publish(versionOnly: false);
                 }
@@ -128,8 +200,15 @@ namespace CoinFlip.EditorTools
             EditorPrefs.SetInt(PrefBump, (int)_bump);
             EditorPrefs.SetBool(PrefAutoBump, _autoBump);
             EditorPrefs.SetBool(PrefCopyStreaming, _copyToStreaming);
-            EditorPrefs.SetString(PrefExportRoot, _exportRoot ?? string.Empty);
+            EditorPrefs.SetString(PrefCdnRoot, _cdnRoot ?? string.Empty);
             EditorPrefs.SetString(PrefCustomVersion, _customVersion ?? string.Empty);
+            EditorPrefs.SetBool(PrefActivateLatest, _activateLatest);
+            EditorPrefs.SetBool(PrefRunUpload, _runUpload);
+            if (_uploaders.Count > 0 && _uploaderIndex >= 0 && _uploaderIndex < _uploaders.Count &&
+                _uploaders[_uploaderIndex].Type != null)
+            {
+                EditorPrefs.SetString(PrefUploader, _uploaders[_uploaderIndex].Type.FullName);
+            }
         }
 
         void ApplyVersionBump(bool saveOnly)
@@ -155,15 +234,15 @@ namespace CoinFlip.EditorTools
             {
                 ApplyVersionBump(saveOnly: false);
                 var target = EditorUserBuildSettings.activeBuildTarget;
+                var cdn = string.IsNullOrWhiteSpace(_cdnRoot) ? "Publish/cdn" : _cdnRoot.Trim();
                 var pipeline = new AssetBundleBuildPipeline(_settings);
+                string output;
 
                 if (versionOnly && !_alsoRebuildBundles)
                 {
-                    pipeline.PublishVersionOnly(target, _copyToStreaming, _exportRoot);
-                    _status =
-                        $"已发布资源版本 {_settings.packageVersion}（仅 version/bootstrap）\n" +
-                        $"输出: {_settings.bundleOutputRoot}/{target}\n" +
-                        $"导出: {_exportRoot}";
+                    // Export CDN separately so ActivateLatest is respected.
+                    pipeline.PublishVersionOnly(target, _copyToStreaming, exportRoot: null);
+                    output = Path.Combine(_settings.bundleOutputRoot, target.ToString()).Replace("\\", "/");
                 }
                 else
                 {
@@ -173,18 +252,42 @@ namespace CoinFlip.EditorTools
                         .WriteFirstPackageManifest()
                         .BuildBundles(target)
                         .CopyFirstPackageToStreaming(target);
-
-                    if (!string.IsNullOrWhiteSpace(_exportRoot))
-                    {
-                        var output = Path.Combine(_settings.bundleOutputRoot, target.ToString());
-                        AssetBundleBuildPipeline.ExportVersionPackage(output, _exportRoot.Trim());
-                    }
-
-                    _status =
-                        $"已完整构建并发布 {_settings.packageVersion}\n" +
-                        $"输出: {_settings.bundleOutputRoot}/{target}\n" +
-                        $"导出: {_exportRoot}";
+                    output = Path.Combine(_settings.bundleOutputRoot, target.ToString()).Replace("\\", "/");
                 }
+
+                var versionDir = AssetBundleBuildPipeline.ExportCdnLayout(
+                    output, cdn, _settings.packageVersion, _activateLatest);
+
+                var uploadNote = string.Empty;
+                if (_runUpload && _uploaders.Count > 0)
+                {
+                    var entry = _uploaders[Mathf.Clamp(_uploaderIndex, 0, _uploaders.Count - 1)];
+                    var ctx = new ResourceVersionUploadContext
+                    {
+                        Version = _settings.packageVersion,
+                        LocalCdnRoot = cdn,
+                        LocalVersionDir = versionDir,
+                        LatestJsonPath = Path.Combine(cdn, LatestManifest.FileName).Replace("\\", "/"),
+                        ActivateLatest = _activateLatest,
+                        BuildTarget = target
+                    };
+
+                    if (entry.Instance.Upload(ctx, out var error))
+                    {
+                        uploadNote = $"\nUploader OK: {entry.DisplayName}";
+                    }
+                    else
+                    {
+                        uploadNote = $"\nUploader failed ({entry.DisplayName}): {error}";
+                        Debug.LogError("[ResourceVersion] " + uploadNote.Trim());
+                    }
+                }
+
+                _status =
+                    $"已发布资源版本 {_settings.packageVersion}\n" +
+                    $"CDN: {versionDir}\n" +
+                    $"latest.json: {_activateLatest}" +
+                    uploadNote;
 
                 Debug.Log("[ResourceVersion] " + _status.Replace('\n', ' '));
             }

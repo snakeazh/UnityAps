@@ -489,47 +489,60 @@ namespace CoinFlip.EditorTools
 
             if (!string.IsNullOrWhiteSpace(exportRoot))
             {
-                ExportVersionPackage(output, exportRoot.Trim());
+                ExportCdnLayout(output, exportRoot.Trim(), _settings.packageVersion, activateLatest: true);
             }
 
             Debug.Log(
                 $"[AssetBundleBuild] Version-only publish → {output} v{_settings.packageVersion}" +
-                (string.IsNullOrWhiteSpace(exportRoot) ? string.Empty : $" export={exportRoot}"));
+                (string.IsNullOrWhiteSpace(exportRoot) ? string.Empty : $" cdn={exportRoot}"));
             return this;
         }
 
-        public static void ExportVersionPackage(string outputDir, string exportRoot)
+        /// <summary>
+        /// Layout B: {cdnRoot}/{version}/ + {cdnRoot}/latest.json
+        /// </summary>
+        public static string ExportCdnLayout(
+            string outputDir,
+            string cdnRoot,
+            string version,
+            bool activateLatest)
         {
-            var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            var dest = Path.Combine(exportRoot, stamp).Replace("\\", "/");
-            Directory.CreateDirectory(dest);
+            version = string.IsNullOrWhiteSpace(version) ? "1.0.0" : version.Trim();
+            cdnRoot = (cdnRoot ?? "Publish/cdn").Replace("\\", "/").TrimEnd('/');
+            var versionDir = Path.Combine(cdnRoot, version).Replace("\\", "/");
+            Directory.CreateDirectory(versionDir);
 
-            foreach (var name in new[] { "version.json", BootstrapManifest.FileName })
-            {
-                var src = Path.Combine(outputDir, name);
-                if (File.Exists(src))
-                {
-                    File.Copy(src, Path.Combine(dest, name), true);
-                }
-            }
-
-            // Optional: copy all bundles for CDN drop.
             if (Directory.Exists(outputDir))
             {
                 foreach (var file in Directory.GetFiles(outputDir))
                 {
                     var fileName = Path.GetFileName(file);
-                    if (string.Equals(fileName, "version.json", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(fileName, BootstrapManifest.FileName, StringComparison.OrdinalIgnoreCase))
+                    // Skip Unity manifest binary named after folder.
+                    if (string.IsNullOrEmpty(fileName))
                     {
                         continue;
                     }
 
-                    File.Copy(file, Path.Combine(dest, fileName), true);
+                    File.Copy(file, Path.Combine(versionDir, fileName), true);
                 }
             }
 
-            Debug.Log($"[AssetBundleBuild] Exported publish package → {dest}");
+            var latestPath = Path.Combine(cdnRoot, LatestManifest.FileName).Replace("\\", "/");
+            if (activateLatest)
+            {
+                var latest = LatestManifest.Create(version);
+                File.WriteAllText(latestPath, latest.ToJson(true), Encoding.UTF8);
+            }
+
+            Debug.Log($"[AssetBundleBuild] CDN layout → {versionDir}" +
+                      (activateLatest ? $" + {latestPath}" : string.Empty));
+            return versionDir;
+        }
+
+        [Obsolete("Use ExportCdnLayout for version-directory + latest.json layout.")]
+        public static void ExportVersionPackage(string outputDir, string exportRoot)
+        {
+            ExportCdnLayout(outputDir, exportRoot, "export", activateLatest: false);
         }
 
         static HashSet<string> MergeTags(

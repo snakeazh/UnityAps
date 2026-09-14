@@ -28,6 +28,8 @@ namespace CoinFlip.Assets
         IDecryptionServices _decryption;
         VersionManifest _remoteVersion;
         VersionManifest _localVersion;
+        LatestManifest _latest;
+        string _remoteContentRoot = string.Empty;
         bool _initialized;
 
         public string PackageName { get; }
@@ -707,6 +709,17 @@ namespace CoinFlip.Assets
                         yield break;
                     }
 
+                    if (string.IsNullOrEmpty(_remoteContentRoot))
+                    {
+                        string resolveError = null;
+                        yield return ResolveRemoteContentRoot(remote, err => resolveError = err);
+                        if (!string.IsNullOrEmpty(resolveError))
+                        {
+                            onError?.Invoke(resolveError);
+                            yield break;
+                        }
+                    }
+
                     var info = _remoteVersion?.Find(bundleName) ?? new VersionBundleInfo
                     {
                         name = bundleName,
@@ -715,7 +728,7 @@ namespace CoinFlip.Assets
                     };
                     var dl = new ResourceDownloader(
                         _fileSystem,
-                        remote,
+                        _remoteContentRoot,
                         new List<VersionBundleInfo> { info },
                         _settings != null ? _settings.downloadRetryCount : 3,
                         _settings != null ? _settings.downloadTimeoutSeconds : 30f);
@@ -791,7 +804,15 @@ namespace CoinFlip.Assets
                 yield break;
             }
 
-            var url = remote + "/version.json";
+            string resolveError = null;
+            yield return ResolveRemoteContentRoot(remote, err => resolveError = err);
+            if (!string.IsNullOrEmpty(resolveError))
+            {
+                op.Complete(false, resolveError);
+                yield break;
+            }
+
+            var url = _remoteContentRoot + "/version.json";
             using (var req = UnityWebRequest.Get(url))
             {
                 req.timeout = Mathf.CeilToInt(_settings != null ? _settings.downloadTimeoutSeconds : 30f);
@@ -820,7 +841,7 @@ namespace CoinFlip.Assets
 
             var dl = new ResourceDownloader(
                 _fileSystem,
-                remote,
+                _remoteContentRoot,
                 pending,
                 _settings != null ? _settings.downloadRetryCount : 3,
                 _settings != null ? _settings.downloadTimeoutSeconds : 30f);
@@ -858,7 +879,15 @@ namespace CoinFlip.Assets
                 yield break;
             }
 
-            using (var req = UnityWebRequest.Get(remote + "/version.json"))
+            string resolveError = null;
+            yield return ResolveRemoteContentRoot(remote, err => resolveError = err);
+            if (!string.IsNullOrEmpty(resolveError))
+            {
+                op.Complete(false, resolveError);
+                yield break;
+            }
+
+            using (var req = UnityWebRequest.Get(_remoteContentRoot + "/version.json"))
             {
                 req.timeout = Mathf.CeilToInt(_settings != null ? _settings.downloadTimeoutSeconds : 30f);
                 yield return req.SendWebRequest();
@@ -884,6 +913,54 @@ namespace CoinFlip.Assets
 
             onResult?.Invoke(pending.Count > 0, size);
             op.Complete(true);
+        }
+
+        /// <summary>
+        /// Layout B: prefer latest.json → {path}/; fallback flat {root}/version.json.
+        /// </summary>
+        IEnumerator ResolveRemoteContentRoot(string remoteRoot, Action<string> onError)
+        {
+            _latest = null;
+            _remoteContentRoot = remoteRoot.TrimEnd('/');
+            var timeout = Mathf.CeilToInt(_settings != null ? _settings.downloadTimeoutSeconds : 30f);
+
+            using (var latestReq = UnityWebRequest.Get(_remoteContentRoot + "/" + LatestManifest.FileName))
+            {
+                latestReq.timeout = timeout;
+                yield return latestReq.SendWebRequest();
+#if UNITY_2020_2_OR_NEWER
+                if (latestReq.result == UnityWebRequest.Result.Success)
+#else
+                if (!(latestReq.isNetworkError || latestReq.isHttpError))
+#endif
+                {
+                    _latest = LatestManifest.FromJson(latestReq.downloadHandler.text);
+                    if (_latest != null && !string.IsNullOrWhiteSpace(_latest.path))
+                    {
+                        _remoteContentRoot = remoteRoot.TrimEnd('/') + "/" + _latest.path.Trim('/');
+                        onError?.Invoke(null);
+                        yield break;
+                    }
+                }
+            }
+
+            // Flat compatibility: root/version.json
+            using (var flatReq = UnityWebRequest.Head(_remoteContentRoot + "/version.json"))
+            {
+                flatReq.timeout = timeout;
+                yield return flatReq.SendWebRequest();
+#if UNITY_2020_2_OR_NEWER
+                if (flatReq.result == UnityWebRequest.Result.Success)
+#else
+                if (!(flatReq.isNetworkError || flatReq.isHttpError))
+#endif
+                {
+                    onError?.Invoke(null);
+                    yield break;
+                }
+            }
+
+            onError?.Invoke("Neither latest.json nor root version.json found under " + remoteRoot);
         }
 
         IEnumerator GetDownloadSizeRoutine(InitializationOperation op, string tags, Action<long> onSize)
