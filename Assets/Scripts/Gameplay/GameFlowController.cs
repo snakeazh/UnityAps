@@ -99,9 +99,12 @@ namespace CoinFlip
                 .Build();
         }
 
-        Flow EnterBooting(FlowStateContext<GameFlowState, GameFlowTrigger> ctx)
+        Flow EnterBooting(FlowStateContext<GameFlowState, GameFlowTrigger> ctx) =>
+            EnterBootingAsync(ctx);
+
+        async Flow EnterBootingAsync(FlowStateContext<GameFlowState, GameFlowTrigger> ctx)
         {
-            _services = GameServices.Ensure(gameObject);
+            _services = await GameServices.EnsureAsync(gameObject);
             ApplyTuning(_services.Tuning);
 
             _bootstrap = GetComponent<GameBootstrap>() ?? gameObject.AddComponent<GameBootstrap>();
@@ -110,7 +113,6 @@ namespace CoinFlip
             _splash = context.Splash;
             _gameManager.BindFlow(this);
             _gameManager.BindServices(_services);
-            return Flow.Completed();
         }
 
         void ApplyTuning(GameTuning tuning)

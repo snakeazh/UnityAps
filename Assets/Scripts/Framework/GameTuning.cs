@@ -1,4 +1,5 @@
 using CoinFlip.Assets;
+using CoinFlip.FlowFramework;
 using UnityEngine;
 
 namespace CoinFlip
@@ -49,16 +50,31 @@ namespace CoinFlip
                 return preferred;
             }
 
-            if (GameAssets.Initialized)
+            return CreateRuntimeDefault();
+        }
+
+        public static async Flow<GameTuning> ResolveOrDefaultAsync(GameTuning preferred = null)
+        {
+            if (preferred != null)
             {
-                var handle = GameAssets.LoadAssetSync<GameTuning>(GameAssetLocations.GameTuning);
-                var fromPackage = handle.GetAssetObject<GameTuning>();
-                if (fromPackage != null)
-                {
-                    return fromPackage;
-                }
+                return preferred;
             }
 
+            if (!GameAssets.Initialized)
+            {
+                return CreateRuntimeDefault();
+            }
+
+            var handle = GameAssets.LoadAssetAsync<GameTuning>(GameAssetLocations.GameTuning);
+            await handle;
+            var fromPackage = handle.GetAssetObject<GameTuning>();
+            if (fromPackage != null)
+            {
+                handle.Release();
+                return fromPackage;
+            }
+
+            handle.Release();
             return CreateRuntimeDefault();
         }
     }

@@ -6,8 +6,8 @@ using UnityEngine.SceneManagement;
 namespace CoinFlip.Assets
 {
     /// <summary>
-    /// Static entry aligned with YooAsset <c>YooAssets</c>:
-    /// Initialize → CreatePackage → SetDefaultPackage → LoadAsset/Scene.
+    /// Facade: static entry aligned with YooAsset <c>YooAssets</c>.
+    /// Async-only public load API.
     /// </summary>
     public static class GameAssets
     {
@@ -27,8 +27,14 @@ namespace CoinFlip.Assets
             }
 
             _bootstrapped = true;
-            Debug.Log("[GameAssets] Initialized (YooAsset-aligned local backend).");
+            Debug.Log("[GameAssets] Initialized (async asset runtime).");
         }
+
+        public static void SetFileSystemFactory(Func<IBundleFileSystem> factory) =>
+            BundleFileSystemFactory.SetFactory(factory);
+
+        public static void SetDecryptionFactory(Func<ResourceSettings, IDecryptionServices> factory) =>
+            DecryptionServicesFactory.SetFactory(factory);
 
         public static ResourcePackage CreatePackage(string packageName)
         {
@@ -60,7 +66,6 @@ namespace CoinFlip.Assets
             Initialized = package != null && package.InitializeStatus;
         }
 
-        /// <summary>Boot helper: create default package and initialize it.</summary>
         public static InitializationOperation EnsureInitializedAsync(
             string packageName = GameAssetLocations.DefaultPackage,
             ResourceInitParameters parameters = null)
@@ -70,7 +75,9 @@ namespace CoinFlip.Assets
             if (!package.InitializeStatus)
             {
                 var op = package.InitializeAsync(parameters ?? DefaultInitParameters());
-                SetDefaultPackage(package);
+                // Mark default early so awaiters can use facade after init completes.
+                op.Completed += _ => SetDefaultPackage(package);
+                DefaultPackage = package;
                 return op;
             }
 
@@ -84,9 +91,8 @@ namespace CoinFlip.Assets
             where TObject : UnityEngine.Object =>
             RequireDefault().LoadAssetAsync<TObject>(location, priority);
 
-        public static AssetHandle LoadAssetSync<TObject>(string location)
-            where TObject : UnityEngine.Object =>
-            RequireDefault().LoadAssetSync<TObject>(location);
+        public static AssetHandle LoadAssetAsync(string location, uint priority = 0) =>
+            RequireDefault().LoadAssetAsync(location, priority);
 
         public static SceneHandle LoadSceneAsync(
             string location,
@@ -95,6 +101,69 @@ namespace CoinFlip.Assets
             bool allowSceneActivation = true,
             uint priority = 0) =>
             RequireDefault().LoadSceneAsync(location, sceneMode, physicsMode, allowSceneActivation, priority);
+
+        public static RawFileHandle LoadRawFileAsync(string location) =>
+            RequireDefault().LoadRawFileAsync(location);
+
+        public static AllAssetsHandle LoadAllAssetsAsync(string locationOrBundle) =>
+            RequireDefault().LoadAllAssetsAsync(locationOrBundle);
+
+        public static SubAssetsHandle LoadSubAssetsAsync<TObject>(string location)
+            where TObject : UnityEngine.Object =>
+            RequireDefault().LoadSubAssetsAsync<TObject>(location);
+
+        public static SubAssetsHandle LoadSubAssetsAsync(string location) =>
+            RequireDefault().LoadSubAssetsAsync(location);
+
+        public static InitializationOperation UpdatePackageAsync() =>
+            RequireDefault().UpdatePackageAsync();
+
+        public static InitializationOperation CheckForUpdatesAsync(Action<bool, long> onResult = null) =>
+            RequireDefault().CheckForUpdatesAsync(onResult);
+
+        public static InitializationOperation GetDownloadSizeAsync(string tags, Action<long> onSize = null) =>
+            RequireDefault().GetDownloadSizeAsync(tags, onSize);
+
+        public static ResourceDownloader DownloadBundlesAsync(string tags) =>
+            RequireDefault().DownloadBundlesAsync(tags);
+
+        public static ResourceDownloader DownloadBundlesAsync(IList<string> bundleNames) =>
+            RequireDefault().DownloadBundlesAsync(bundleNames);
+
+        public static ResourceDownloader CreateDownloader(string tags) =>
+            RequireDefault().CreateDownloader(tags);
+
+        public static InitializationOperation PreloadFirstPackageAsync() =>
+            RequireDefault().PreloadFirstPackageAsync();
+
+        public static InitializationOperation ClearCacheAsync() =>
+            RequireDefault().ClearCacheAsync();
+
+        public static InitializationOperation ClearUnusedCacheAsync() =>
+            RequireDefault().ClearUnusedCacheAsync();
+
+        public static void UnloadUnusedAssets() => RequireDefault().UnloadUnusedAssets();
+
+        public static void UnloadBundle(string bundleName, bool force = false) =>
+            RequireDefault().UnloadBundle(bundleName, force);
+
+        public static bool IsFirstPackage(string location) =>
+            RequireDefault().IsFirstPackage(location);
+
+        public static bool IsBundleReady(string bundleName) =>
+            RequireDefault().IsBundleReady(bundleName);
+
+        public static bool HasAsset(string location) =>
+            RequireDefault().HasAsset(location);
+
+        public static bool CheckLocationValid(string location) =>
+            RequireDefault().CheckLocationValid(location);
+
+        public static AssetInfo[] GetAssetInfosByTag(string tag) =>
+            RequireDefault().GetAssetInfosByTag(tag);
+
+        public static string GetPackageVersion() =>
+            DefaultPackage != null ? DefaultPackage.GetPackageVersion() : string.Empty;
 
         static ResourcePackage RequireDefault()
         {
@@ -111,7 +180,7 @@ namespace CoinFlip.Assets
         {
             return new ResourceInitParameters
             {
-                PlayMode = Application.isEditor ? EPlayMode.EditorSimulateMode : EPlayMode.OfflinePlayMode
+                SettingsAssetPath = ResourceSettings.DefaultAssetPath
             };
         }
     }

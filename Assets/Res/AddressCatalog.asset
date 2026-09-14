@@ -16,6 +16,24 @@ MonoBehaviour:
   - location: GameTuning
     assetPath: Assets/Res/GameTuning.asset
     sceneName: 
+    bundleName: assets_res.bundle
+    tags:
+    - first
+    isFirstPackage: 1
+    isRawFile: 0
   - location: Main
     assetPath: 
     sceneName: Main
+    bundleName: 
+    tags:
+    - first
+    isFirstPackage: 1
+    isRawFile: 0
+  - location: ResourceSettings
+    assetPath: Assets/Res/ResourceSettings.asset
+    sceneName: 
+    bundleName: assets_res.bundle
+    tags:
+    - first
+    isFirstPackage: 1
+    isRawFile: 0

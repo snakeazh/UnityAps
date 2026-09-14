@@ -6,7 +6,7 @@ using UnityEngine.SceneManagement;
 namespace CoinFlip
 {
     /// <summary>
-    /// Empty Boot scene entry: initialize the YooAsset-aligned package, then load Main by location.
+    /// Empty Boot scene entry: initialize package, optional host update + first package, then load Main.
     /// </summary>
     [DefaultExecutionOrder(-300)]
     public sealed class BootSceneLoader : MonoBehaviour
@@ -14,6 +14,8 @@ namespace CoinFlip
         [SerializeField] string packageName = GameAssetLocations.DefaultPackage;
         [SerializeField] string targetSceneName = GameAssetLocations.SceneMain;
         [SerializeField] float minHoldSeconds = 0.05f;
+        [SerializeField] bool updatePackageOnBoot = true;
+        [SerializeField] bool preloadFirstPackage = true;
 
         Flow _loadFlow;
 
@@ -32,6 +34,19 @@ namespace CoinFlip
         {
             var init = GameAssets.EnsureInitializedAsync(packageName);
             await init;
+
+            var package = GameAssets.DefaultPackage;
+            if (package != null &&
+                package.PlayMode == EPlayMode.HostPlayMode &&
+                updatePackageOnBoot)
+            {
+                await package.UpdatePackageAsync();
+            }
+
+            if (package != null && preloadFirstPackage)
+            {
+                await package.PreloadFirstPackageAsync();
+            }
 
             if (minHoldSeconds > 0f)
             {
