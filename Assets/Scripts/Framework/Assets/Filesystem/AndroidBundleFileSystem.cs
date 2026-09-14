@@ -25,7 +25,8 @@ namespace CoinFlip.Assets
         {
             // Cache first
             var cachePath = Path.Combine(GetCacheRootPath(), relativeOrUrl);
-            if (File.Exists(cachePath))
+            var cacheBundled = Path.Combine(GetCacheRootPath(), StreamingBundlePaths.Relative(relativeOrUrl));
+            if (File.Exists(cachePath) || File.Exists(cacheBundled))
             {
                 onDone?.Invoke(true);
                 yield break;
@@ -109,7 +110,7 @@ namespace CoinFlip.Assets
 
         string CombineStreaming(string relative)
         {
-            relative = (relative ?? string.Empty).Replace("\\", "/").TrimStart('/');
+            relative = StreamingBundlePaths.Relative(relative ?? string.Empty);
             if (_streaming.EndsWith("/"))
             {
                 return _streaming + relative;

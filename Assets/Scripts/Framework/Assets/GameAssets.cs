@@ -75,7 +75,9 @@ namespace CoinFlip.Assets
             if (!package.InitializeStatus)
             {
                 var op = package.InitializeAsync(parameters ?? DefaultInitParameters());
-                SetDefaultPackage(package);
+                // Mark default early so awaiters can use facade after init completes.
+                op.Completed += _ => SetDefaultPackage(package);
+                DefaultPackage = package;
                 return op;
             }
 
@@ -110,14 +112,55 @@ namespace CoinFlip.Assets
             where TObject : UnityEngine.Object =>
             RequireDefault().LoadSubAssetsAsync<TObject>(location);
 
+        public static SubAssetsHandle LoadSubAssetsAsync(string location) =>
+            RequireDefault().LoadSubAssetsAsync(location);
+
         public static InitializationOperation UpdatePackageAsync() =>
             RequireDefault().UpdatePackageAsync();
+
+        public static InitializationOperation CheckForUpdatesAsync(Action<bool, long> onResult = null) =>
+            RequireDefault().CheckForUpdatesAsync(onResult);
+
+        public static InitializationOperation GetDownloadSizeAsync(string tags, Action<long> onSize = null) =>
+            RequireDefault().GetDownloadSizeAsync(tags, onSize);
+
+        public static ResourceDownloader DownloadBundlesAsync(string tags) =>
+            RequireDefault().DownloadBundlesAsync(tags);
+
+        public static ResourceDownloader DownloadBundlesAsync(IList<string> bundleNames) =>
+            RequireDefault().DownloadBundlesAsync(bundleNames);
+
+        public static ResourceDownloader CreateDownloader(string tags) =>
+            RequireDefault().CreateDownloader(tags);
 
         public static InitializationOperation PreloadFirstPackageAsync() =>
             RequireDefault().PreloadFirstPackageAsync();
 
+        public static InitializationOperation ClearCacheAsync() =>
+            RequireDefault().ClearCacheAsync();
+
+        public static InitializationOperation ClearUnusedCacheAsync() =>
+            RequireDefault().ClearUnusedCacheAsync();
+
+        public static void UnloadUnusedAssets() => RequireDefault().UnloadUnusedAssets();
+
+        public static void UnloadBundle(string bundleName, bool force = false) =>
+            RequireDefault().UnloadBundle(bundleName, force);
+
         public static bool IsFirstPackage(string location) =>
             RequireDefault().IsFirstPackage(location);
+
+        public static bool IsBundleReady(string bundleName) =>
+            RequireDefault().IsBundleReady(bundleName);
+
+        public static bool HasAsset(string location) =>
+            RequireDefault().HasAsset(location);
+
+        public static bool CheckLocationValid(string location) =>
+            RequireDefault().CheckLocationValid(location);
+
+        public static AssetInfo[] GetAssetInfosByTag(string tag) =>
+            RequireDefault().GetAssetInfosByTag(tag);
 
         public static string GetPackageVersion() =>
             DefaultPackage != null ? DefaultPackage.GetPackageVersion() : string.Empty;
@@ -135,12 +178,10 @@ namespace CoinFlip.Assets
 
         static ResourceInitParameters DefaultInitParameters()
         {
-            var p = new ResourceInitParameters
+            return new ResourceInitParameters
             {
                 SettingsAssetPath = ResourceSettings.DefaultAssetPath
             };
-            // PlayMode resolved from ResourceSettings inside InitializeAsync when not specified.
-            return p;
         }
     }
 }

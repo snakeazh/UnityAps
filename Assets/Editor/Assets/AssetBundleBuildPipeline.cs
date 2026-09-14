@@ -22,6 +22,8 @@ namespace CoinFlip.EditorTools
             new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, HashSet<string>> _bundleTags =
             new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        readonly List<(string sourcePath, string outputName, bool first)> _rawFiles =
+            new List<(string, string, bool)>();
 
         public AssetBundleBuildPipeline(ResourceSettings settings)
         {
@@ -34,6 +36,7 @@ namespace CoinFlip.EditorTools
             _bundleToAssets.Clear();
             _bundleToAddresses.Clear();
             _bundleTags.Clear();
+            _rawFiles.Clear();
 
             var firstTags = new HashSet<string>(_settings.ParseFirstPackageTags(), StringComparer.OrdinalIgnoreCase);
             var groups = _settings.groups;
@@ -89,9 +92,16 @@ namespace CoinFlip.EditorTools
                         var isFirst = tags.Any(t => firstTags.Contains(t));
                         var isRaw = collector.packRule == EPackRule.PackRawFile;
                         var location = addressRule.GetAddress(path);
-                        var bundleName = isScene
+                        var bundleName = isScene || isRaw
                             ? string.Empty
                             : pack.GetBundleName(path, collectPath, group.groupName, collector.groupBundleName);
+                        var rawFileName = isRaw
+                            ? PackRuleFactory.SanitizeBundleName(location).Replace(".bundle", Path.GetExtension(path))
+                            : string.Empty;
+                        if (isRaw && string.IsNullOrEmpty(Path.GetExtension(rawFileName)))
+                        {
+                            rawFileName = location + Path.GetExtension(path);
+                        }
 
                         if (collector.collectorType == ECollectorType.MainAssetCollector)
                         {
@@ -103,11 +113,18 @@ namespace CoinFlip.EditorTools
                                 bundleName = bundleName,
                                 tags = tags.ToArray(),
                                 isFirstPackage = isFirst,
-                                isRawFile = isRaw
+                                isRawFile = isRaw,
+                                rawFileName = rawFileName
                             });
                         }
 
-                        if (isScene || string.IsNullOrEmpty(bundleName) || isRaw)
+                        if (isRaw && !isScene)
+                        {
+                            _rawFiles.Add((path, rawFileName, isFirst));
+                            continue;
+                        }
+
+                        if (isScene || string.IsNullOrEmpty(bundleName))
                         {
                             continue;
                         }
@@ -221,6 +238,8 @@ namespace CoinFlip.EditorTools
             {
                 Debug.LogWarning("[AssetBundleBuild] No bundles to build.");
                 WriteVersionManifest(output, target);
+                CopyRawFiles(output);
+                WriteBootstrap(output);
                 return this;
             }
 
@@ -245,8 +264,56 @@ namespace CoinFlip.EditorTools
             }
 
             WriteVersionManifest(output, target);
+            CopyRawFiles(output);
+            WriteBootstrap(output);
             Debug.Log($"[AssetBundleBuild] Built {builds.Length} bundles → {output}");
             return this;
+        }
+
+        void CopyRawFiles(string output)
+        {
+            for (var i = 0; i < _rawFiles.Count; i++)
+            {
+                var raw = _rawFiles[i];
+                var dst = Path.Combine(output, raw.outputName);
+                File.Copy(raw.sourcePath, dst, true);
+                if (_settings.enableEncryption)
+                {
+                    BundleEncryptionUtility.EncryptFileInPlace(dst, _settings);
+                }
+            }
+        }
+
+        void WriteBootstrap(string output)
+        {
+            var bootstrap = new BootstrapManifest
+            {
+                packageVersion = _settings.packageVersion,
+                editorPlayMode = (int)_settings.editorPlayMode,
+                runtimePlayMode = (int)_settings.runtimePlayMode,
+                remoteRootUrl = _settings.remoteRootUrl,
+                cacheRoot = _settings.cacheRoot,
+                firstPackageTags = _settings.firstPackageTags,
+                enableEncryption = _settings.enableEncryption,
+                decryptionType = (int)_settings.decryptionType,
+                encryptionOffset = _settings.encryptionOffset,
+                xorKey = _settings.xorKey,
+                entries = _entries.Select(e => new BootstrapAddressEntry
+                {
+                    location = e.location,
+                    assetPath = e.assetPath,
+                    sceneName = e.sceneName,
+                    bundleName = e.bundleName,
+                    tags = e.tags == null ? string.Empty : string.Join(";", e.tags),
+                    isFirstPackage = e.isFirstPackage,
+                    isRawFile = e.isRawFile,
+                    rawFileName = e.rawFileName
+                }).ToList()
+            };
+            File.WriteAllText(
+                Path.Combine(output, BootstrapManifest.FileName),
+                bootstrap.ToJson(true),
+                Encoding.UTF8);
         }
 
         public AssetBundleBuildPipeline CopyFirstPackageToStreaming(BuildTarget target)
@@ -295,6 +362,29 @@ namespace CoinFlip.EditorTools
             if (File.Exists(verSrc))
             {
                 File.Copy(verSrc, Path.Combine(streaming, "version.json"), true);
+            }
+
+            var bootSrc = Path.Combine(output, BootstrapManifest.FileName);
+            if (File.Exists(bootSrc))
+            {
+                File.Copy(bootSrc, Path.Combine(streaming, BootstrapManifest.FileName), true);
+            }
+
+            for (var i = 0; i < _rawFiles.Count; i++)
+            {
+                var raw = _rawFiles[i];
+                if (!copyAll && !raw.first)
+                {
+                    continue;
+                }
+
+                var src = Path.Combine(output, raw.outputName);
+                if (!File.Exists(src))
+                {
+                    continue;
+                }
+
+                File.Copy(src, Path.Combine(streaming, raw.outputName), true);
             }
 
             AssetDatabase.Refresh();

@@ -45,8 +45,22 @@ namespace CoinFlip.Assets
         public InitializationOperation InitializeAsync(ResourceInitParameters parameters = null)
         {
             var op = new InitializationOperation();
-            parameters = parameters ?? new ResourceInitParameters();
+            FlowRunner.StartRoutine(InitializeRoutine(op, parameters ?? new ResourceInitParameters()));
+            return op;
+        }
+
+        IEnumerator InitializeRoutine(InitializationOperation op, ResourceInitParameters parameters)
+        {
+            _fileSystem = parameters.FileSystem ??
+                          BundleFileSystemFactory.Create(
+                              parameters.Settings != null ? parameters.Settings.cacheRoot : "BundleCache");
+
             _settings = parameters.Settings ?? LoadSettingsAsset(parameters.SettingsAssetPath);
+            if (_settings == null)
+            {
+                yield return LoadBootstrapIntoSettings();
+            }
+
             if (parameters.PlayModeSpecified)
             {
                 PlayMode = parameters.PlayMode;
@@ -60,25 +74,142 @@ namespace CoinFlip.Assets
                 PlayMode = Application.isEditor ? EPlayMode.EditorSimulateMode : EPlayMode.OfflinePlayMode;
             }
 
-            _fileSystem = parameters.FileSystem ??
-                          BundleFileSystemFactory.Create(_settings != null ? _settings.cacheRoot : "BundleCache");
+            if (_fileSystem == null)
+            {
+                _fileSystem = BundleFileSystemFactory.Create(_settings != null ? _settings.cacheRoot : "BundleCache");
+            }
+
             _decryption = parameters.Decryption ?? DecryptionServicesFactory.Create(_settings);
 
             var catalogPath = !string.IsNullOrEmpty(parameters.CatalogAssetPath)
                 ? parameters.CatalogAssetPath
                 : (_settings != null ? _settings.catalogAssetPath : ResRoot.CatalogAssetPath);
             _catalog = LoadCatalog(catalogPath);
+            if (_catalog == null || _catalog.entries == null || _catalog.entries.Count == 0)
+            {
+                yield return LoadBootstrapCatalogIfNeeded();
+            }
+
             _firstPackage = LoadFirstPackage(
                 _settings != null ? _settings.firstPackageManifestPath : ResRoot.Folder + "/FirstPackageManifest.asset");
+
             _localVersion = new VersionManifest
             {
                 version = _settings != null ? _settings.packageVersion : "1.0.0"
             };
+            yield return TryLoadLocalVersionManifest();
 
             _initialized = true;
             op.Complete(true);
             Debug.Log($"[ResourcePackage] '{PackageName}' initialized ({PlayMode}).");
-            return op;
+        }
+
+        IEnumerator LoadBootstrapIntoSettings()
+        {
+            byte[] bytes = null;
+            string err = null;
+            yield return _fileSystem.ReadAllBytesAsync(
+                BootstrapManifest.StreamingRelativePath,
+                (b, e) =>
+                {
+                    bytes = b;
+                    err = e;
+                });
+            if (bytes == null || bytes.Length == 0)
+            {
+                if (!string.IsNullOrEmpty(err))
+                {
+                    Debug.LogWarning("[ResourcePackage] bootstrap.json missing: " + err);
+                }
+
+                yield break;
+            }
+
+            var bootstrap = BootstrapManifest.FromJson(System.Text.Encoding.UTF8.GetString(bytes));
+            _settings = ResourceSettings.CreateDefaultInstance();
+            _settings.packageVersion = bootstrap.packageVersion;
+            _settings.editorPlayMode = (EPlayMode)bootstrap.editorPlayMode;
+            _settings.runtimePlayMode = (EPlayMode)bootstrap.runtimePlayMode;
+            _settings.remoteRootUrl = bootstrap.remoteRootUrl;
+            _settings.cacheRoot = string.IsNullOrEmpty(bootstrap.cacheRoot) ? "BundleCache" : bootstrap.cacheRoot;
+            _settings.firstPackageTags = bootstrap.firstPackageTags;
+            _settings.enableEncryption = bootstrap.enableEncryption;
+            _settings.decryptionType = (EDecryptionType)bootstrap.decryptionType;
+            _settings.encryptionOffset = bootstrap.encryptionOffset;
+            _settings.xorKey = bootstrap.xorKey;
+        }
+
+        IEnumerator LoadBootstrapCatalogIfNeeded()
+        {
+            if (_catalog != null && _catalog.entries != null && _catalog.entries.Count > 0)
+            {
+                yield break;
+            }
+
+            byte[] bytes = null;
+            yield return _fileSystem.ReadAllBytesAsync(
+                BootstrapManifest.StreamingRelativePath,
+                (b, e) => { bytes = b; });
+            if (bytes == null)
+            {
+                _catalog = AddressCatalog.CreateBuiltin();
+                yield break;
+            }
+
+            var bootstrap = BootstrapManifest.FromJson(System.Text.Encoding.UTF8.GetString(bytes));
+            ApplyBootstrapEntries(bootstrap);
+        }
+
+        void ApplyBootstrapEntries(BootstrapManifest bootstrap)
+        {
+            if (bootstrap?.entries == null)
+            {
+                return;
+            }
+
+            if (_catalog == null)
+            {
+                _catalog = ScriptableObject.CreateInstance<AddressCatalog>();
+                _catalog.name = "AddressCatalog (Bootstrap)";
+            }
+
+            _catalog.entries = new List<AddressEntry>();
+            for (var i = 0; i < bootstrap.entries.Count; i++)
+            {
+                var e = bootstrap.entries[i];
+                if (e == null)
+                {
+                    continue;
+                }
+
+                _catalog.entries.Add(new AddressEntry
+                {
+                    location = e.location,
+                    assetPath = e.assetPath,
+                    sceneName = e.sceneName,
+                    bundleName = e.bundleName,
+                    tags = string.IsNullOrEmpty(e.tags)
+                        ? Array.Empty<string>()
+                        : e.tags.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries),
+                    isFirstPackage = e.isFirstPackage,
+                    isRawFile = e.isRawFile,
+                    rawFileName = e.rawFileName
+                });
+            }
+        }
+
+        IEnumerator TryLoadLocalVersionManifest()
+        {
+            byte[] bytes = null;
+            yield return _fileSystem.ReadAllBytesAsync(
+                StreamingBundlePaths.Relative("version.json"),
+                (b, e) => { bytes = b; });
+            if (bytes == null || bytes.Length == 0)
+            {
+                yield break;
+            }
+
+            _localVersion = VersionManifest.FromJson(System.Text.Encoding.UTF8.GetString(bytes));
         }
 
         public AssetHandle LoadAssetAsync<TObject>(string location, uint priority = 0)
@@ -239,7 +370,15 @@ namespace CoinFlip.Assets
         {
             CheckInitialized();
             var op = new InitializationOperation();
-            FlowRunner.StartRoutine(ClearCacheRoutine(op));
+            FlowRunner.StartRoutine(ClearCacheRoutine(op, unusedOnly: false));
+            return op;
+        }
+
+        public InitializationOperation ClearUnusedCacheAsync()
+        {
+            CheckInitialized();
+            var op = new InitializationOperation();
+            FlowRunner.StartRoutine(ClearCacheRoutine(op, unusedOnly: true));
             return op;
         }
 
@@ -278,6 +417,24 @@ namespace CoinFlip.Assets
                 return true;
             }
 
+            // Sync-friendly probe via cache/streaming path helpers used by FS implementations.
+            var cacheRoot = _fileSystem != null ? _fileSystem.GetCacheRootPath() : null;
+            if (!string.IsNullOrEmpty(cacheRoot))
+            {
+                var cachePath = Path.Combine(cacheRoot, bundleName);
+                if (File.Exists(cachePath) || File.Exists(Path.Combine(cacheRoot, StreamingBundlePaths.Relative(bundleName))))
+                {
+                    return true;
+                }
+            }
+
+#if !UNITY_ANDROID || UNITY_EDITOR
+            var streaming = Path.Combine(Application.streamingAssetsPath, StreamingBundlePaths.Relative(bundleName));
+            if (File.Exists(streaming))
+            {
+                return true;
+            }
+#endif
             return false;
         }
 
@@ -418,9 +575,12 @@ namespace CoinFlip.Assets
                 yield break;
             }
 
-            var relative = string.IsNullOrEmpty(entry.bundleName)
-                ? Path.GetFileName(entry.assetPath)
-                : entry.bundleName;
+            var relative = !string.IsNullOrEmpty(entry.rawFileName)
+                ? entry.rawFileName
+                : (!string.IsNullOrEmpty(entry.bundleName)
+                    ? entry.bundleName
+                    : Path.GetFileName(entry.assetPath));
+            relative = StreamingBundlePaths.Relative(relative);
             byte[] data = null;
             string err = null;
             yield return _fileSystem.ReadAllBytesAsync(relative, (b, e) =>
@@ -532,7 +692,12 @@ namespace CoinFlip.Assets
             if (PlayMode == EPlayMode.HostPlayMode)
             {
                 bool exists = false;
-                yield return _fileSystem.ExistsAsync(bundleName, v => exists = v);
+                yield return _fileSystem.ExistsAsync(StreamingBundlePaths.Relative(bundleName), v => exists = v);
+                if (!exists)
+                {
+                    yield return _fileSystem.ExistsAsync(bundleName, v => exists = v);
+                }
+
                 if (!exists)
                 {
                     var remote = _settings != null ? _settings.ResolveRemoteRootUrl() : string.Empty;
@@ -570,15 +735,17 @@ namespace CoinFlip.Assets
 
             AssetBundle ab = null;
             string err = null;
-            yield return _fileSystem.LoadBundleAsync(bundleName, _decryption, (bundle, e) =>
-            {
-                ab = bundle;
-                err = e;
-            });
+            yield return _fileSystem.LoadBundleAsync(
+                StreamingBundlePaths.Relative(bundleName),
+                _decryption,
+                (bundle, e) =>
+                {
+                    ab = bundle;
+                    err = e;
+                });
             if (ab == null)
             {
-                // StreamingAssets/Bundles/<name>
-                yield return _fileSystem.LoadBundleAsync("Bundles/" + bundleName, _decryption, (bundle, e) =>
+                yield return _fileSystem.LoadBundleAsync(bundleName, _decryption, (bundle, e) =>
                 {
                     ab = bundle;
                     err = e;
@@ -693,6 +860,7 @@ namespace CoinFlip.Assets
 
             using (var req = UnityWebRequest.Get(remote + "/version.json"))
             {
+                req.timeout = Mathf.CeilToInt(_settings != null ? _settings.downloadTimeoutSeconds : 30f);
                 yield return req.SendWebRequest();
 #if UNITY_2020_2_OR_NEWER
                 if (req.result != UnityWebRequest.Result.Success)
@@ -781,15 +949,54 @@ namespace CoinFlip.Assets
             op.Complete(true);
         }
 
-        IEnumerator ClearCacheRoutine(InitializationOperation op)
+        IEnumerator ClearCacheRoutine(InitializationOperation op, bool unusedOnly)
         {
             var root = _fileSystem.GetCacheRootPath();
             try
             {
-                if (Directory.Exists(root))
+                if (!Directory.Exists(root))
+                {
+                    Directory.CreateDirectory(root);
+                    op.Complete(true);
+                    yield break;
+                }
+
+                if (!unusedOnly)
                 {
                     Directory.Delete(root, true);
                     Directory.CreateDirectory(root);
+                    op.Complete(true);
+                    yield break;
+                }
+
+                var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var source = _remoteVersion ?? _localVersion;
+                if (source?.bundles != null)
+                {
+                    for (var i = 0; i < source.bundles.Count; i++)
+                    {
+                        var b = source.bundles[i];
+                        if (b != null && !string.IsNullOrEmpty(b.name))
+                        {
+                            keep.Add(b.name);
+                            keep.Add(StreamingBundlePaths.Relative(b.name));
+                        }
+                    }
+                }
+
+                keep.Add("version.json");
+                keep.Add(BootstrapManifest.FileName);
+                keep.Add(StreamingBundlePaths.Relative("version.json"));
+                keep.Add(BootstrapManifest.StreamingRelativePath);
+
+                foreach (var file in Directory.GetFiles(root, "*", SearchOption.AllDirectories))
+                {
+                    var rel = file.Substring(root.Length).TrimStart(Path.DirectorySeparatorChar, '/', '\\')
+                        .Replace("\\", "/");
+                    if (!keep.Contains(rel) && !keep.Contains(Path.GetFileName(rel)))
+                    {
+                        File.Delete(file);
+                    }
                 }
 
                 op.Complete(true);
@@ -843,6 +1050,17 @@ namespace CoinFlip.Assets
                     }
                 }
 
+                if (IsBundleReady(b.name))
+                {
+                    var local = _localVersion?.Find(b.name);
+                    if (local == null ||
+                        string.IsNullOrEmpty(b.hash) ||
+                        string.Equals(local.hash, b.hash, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                }
+
                 result.Add(b);
             }
 
@@ -879,11 +1097,10 @@ namespace CoinFlip.Assets
             if (!ResRoot.Contains(path))
             {
                 Debug.LogError($"[ResourcePackage] Catalog must live under {ResRoot.Folder}: {path}");
-                return AddressCatalog.CreateBuiltin();
+                return null;
             }
 
-            var catalog = LoadEditorOrResources(path, typeof(AddressCatalog)) as AddressCatalog;
-            return catalog != null ? catalog : AddressCatalog.CreateBuiltin();
+            return LoadEditorOrResources(path, typeof(AddressCatalog)) as AddressCatalog;
         }
 
         static FirstPackageManifest LoadFirstPackage(string path)

@@ -163,7 +163,25 @@ namespace CoinFlip.Assets
                 return cache;
             }
 
-            return Path.Combine(Application.streamingAssetsPath, pathOrUrl);
+            var cacheBundled = Path.Combine(_cacheRoot, StreamingBundlePaths.Relative(pathOrUrl));
+            if (File.Exists(cacheBundled))
+            {
+                return cacheBundled;
+            }
+
+            var streaming = Path.Combine(Application.streamingAssetsPath, pathOrUrl);
+            if (File.Exists(streaming))
+            {
+                return streaming;
+            }
+
+            var streamingBundled = Path.Combine(Application.streamingAssetsPath, StreamingBundlePaths.Relative(pathOrUrl));
+            if (File.Exists(streamingBundled))
+            {
+                return streamingBundled;
+            }
+
+            return streamingBundled;
         }
     }
 }

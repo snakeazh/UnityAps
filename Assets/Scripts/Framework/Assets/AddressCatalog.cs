@@ -24,6 +24,9 @@ namespace CoinFlip.Assets
         public bool isFirstPackage;
 
         public bool isRawFile;
+
+        [Tooltip("Raw file name under StreamingAssets/Bundles when isRawFile.")]
+        public string rawFileName;
     }
 
     /// <summary>

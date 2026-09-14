@@ -70,9 +70,11 @@ namespace CoinFlip
             var fromPackage = handle.GetAssetObject<GameTuning>();
             if (fromPackage != null)
             {
+                handle.Release();
                 return fromPackage;
             }
 
+            handle.Release();
             return CreateRuntimeDefault();
         }
     }
