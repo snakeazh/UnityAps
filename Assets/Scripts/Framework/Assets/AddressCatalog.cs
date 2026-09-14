@@ -15,6 +15,15 @@ namespace CoinFlip.Assets
 
         [Tooltip("Build Settings scene name, when this address is a scene.")]
         public string sceneName;
+
+        [Tooltip("Logical AssetBundle name from PackRule.")]
+        public string bundleName;
+
+        public string[] tags;
+
+        public bool isFirstPackage;
+
+        public bool isRawFile;
     }
 
     /// <summary>
@@ -53,6 +62,50 @@ namespace CoinFlip.Assets
             return false;
         }
 
+        public bool HasAsset(string location) => TryResolve(location, out _);
+
+        public List<AddressEntry> GetEntriesByTag(string tag)
+        {
+            var list = new List<AddressEntry>();
+            if (entries == null || string.IsNullOrEmpty(tag))
+            {
+                return list;
+            }
+
+            for (var i = 0; i < entries.Count; i++)
+            {
+                var item = entries[i];
+                if (item?.tags == null)
+                {
+                    continue;
+                }
+
+                for (var t = 0; t < item.tags.Length; t++)
+                {
+                    if (string.Equals(item.tags[t], tag, StringComparison.OrdinalIgnoreCase))
+                    {
+                        list.Add(item);
+                        break;
+                    }
+                }
+            }
+
+            return list;
+        }
+
+        public AssetInfo[] GetAssetInfosByTag(string tag, Type type)
+        {
+            var matched = GetEntriesByTag(tag);
+            var infos = new AssetInfo[matched.Count];
+            for (var i = 0; i < matched.Count; i++)
+            {
+                var e = matched[i];
+                infos[i] = new AssetInfo(e.location, e.assetPath, type);
+            }
+
+            return infos;
+        }
+
         static bool LocationsEqual(string a, string b) =>
             !string.IsNullOrEmpty(a) &&
             string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
@@ -69,7 +122,6 @@ namespace CoinFlip.Assets
                 return true;
             }
 
-            // YooAsset: path without extension also matches.
             var noExt = System.IO.Path.ChangeExtension(assetPath, null);
             return string.Equals(noExt, location, StringComparison.OrdinalIgnoreCase);
         }
@@ -81,7 +133,10 @@ namespace CoinFlip.Assets
             catalog.entries.Add(new AddressEntry
             {
                 location = GameAssetLocations.GameTuning,
-                assetPath = ResRoot.Folder + "/GameTuning.asset"
+                assetPath = ResRoot.Folder + "/GameTuning.asset",
+                bundleName = "assets_res.bundle",
+                tags = new[] { "first" },
+                isFirstPackage = true
             });
             return catalog;
         }

@@ -5,18 +5,22 @@ using UnityEngine;
 namespace CoinFlip.Assets
 {
     /// <summary>
-    /// Load handle aligned with YooAsset <c>AssetHandle</c>:
-    /// Completed / yield / await / AssetObject / Release / InstantiateSync.
+    /// Load handle: Completed / yield / await / Retain-Release / Progress (Observer + ref-count).
     /// </summary>
     public sealed class AssetHandle : CustomYieldInstruction
     {
         Action<AssetHandle> _completed;
+        int _refCount = 1;
         bool _released;
 
         public bool IsDone { get; private set; }
         public bool LastOperationSucceed { get; private set; } = true;
         public string Location { get; }
+        public string Error { get; private set; } = string.Empty;
+        public float Progress { get; private set; }
         public UnityEngine.Object AssetObject { get; private set; }
+        public string BundleName { get; private set; }
+        public int RefCount => _refCount;
         public override bool keepWaiting => !IsDone;
 
         public event Action<AssetHandle> Completed
@@ -37,7 +41,11 @@ namespace CoinFlip.Assets
             Location = location ?? string.Empty;
         }
 
-        internal void Complete(UnityEngine.Object asset, bool success)
+        internal void SetBundleName(string bundleName) => BundleName = bundleName;
+
+        internal void SetProgress(float progress) => Progress = Mathf.Clamp01(progress);
+
+        internal void Complete(UnityEngine.Object asset, bool success, string error = null)
         {
             if (IsDone)
             {
@@ -46,6 +54,8 @@ namespace CoinFlip.Assets
 
             AssetObject = asset;
             LastOperationSucceed = success && asset != null;
+            Error = LastOperationSucceed ? string.Empty : (error ?? "Load failed");
+            Progress = 1f;
             IsDone = true;
             _completed?.Invoke(this);
         }
@@ -65,9 +75,25 @@ namespace CoinFlip.Assets
             return UnityEngine.Object.Instantiate(prefab, parent, worldPositionStays);
         }
 
+        public void Retain()
+        {
+            if (_released)
+            {
+                return;
+            }
+
+            _refCount++;
+        }
+
         public void Release()
         {
             if (_released)
+            {
+                return;
+            }
+
+            _refCount--;
+            if (_refCount > 0)
             {
                 return;
             }
@@ -76,13 +102,15 @@ namespace CoinFlip.Assets
             AssetObject = null;
         }
 
+        internal bool IsReleased => _released;
+
         public Flow ToFlow()
         {
             if (IsDone)
             {
                 return LastOperationSucceed
                     ? Flow.Completed()
-                    : Flow.FromException(new InvalidOperationException($"Load failed: {Location}"));
+                    : Flow.FromException(new InvalidOperationException(Error));
             }
 
             return Flow.Create(flow =>
@@ -95,7 +123,7 @@ namespace CoinFlip.Assets
                     }
                     else
                     {
-                        flow.TrySetException(new InvalidOperationException($"Load failed: {Location}"));
+                        flow.TrySetException(new InvalidOperationException(Error));
                     }
                 };
             });

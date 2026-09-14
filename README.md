@@ -41,9 +41,11 @@ Assets/
     Main.unity                  # 玩法场景
   Res/                          # 唯一可加载资源根（YooAsset 收集目录）
     AddressCatalog.asset
+    ResourceSettings.asset      # PlayMode / PackRule / 首包 / CDN / 加密
+    FirstPackageManifest.asset
     GameTuning.asset
   Scripts/Framework/            # 轻量 App 服务层
-    Assets/                     # YooAsset 对齐的资源管理
+    Assets/                     # 异步资源运行时（Facade + Strategy + FS）
     GameServices.cs             # 组合根（非 DI）
     GameTuning.cs               # ScriptableObject 调参
     GameSettings.cs             # 静音 / 震动开关（PlayerPrefs）
@@ -56,13 +58,14 @@ Assets/
     FlowAwaiter.cs / FlowRunner.cs
     Examples/SplashCoverFlow.cs # 继承 Flow 的示例
   Scripts/Gameplay/
-    BootSceneLoader.cs          # Boot → GameAssets 初始化后按 location 进 Main
+    BootSceneLoader.cs          # Boot → 初始化/首包后按 location 进 Main
     GameFlowController.cs       # 启动 FSM：Booting → … → Playing
     GameManager.cs              # 对局 FSM：Idle ⇄ Flipping
     MatchState.cs / GameFlowState.cs / SplashView.cs / GameBootstrap.cs
     CoinController.cs / CoinSparkBurst.cs
   Scripts/UI/GameUI.cs
   Editor/CoinFlipEditorMenu.cs
+  Editor/Assets/                # Resource 菜单 + AssetBundleBuild 流水线
 ```
 
 ## Flow 框架（带返回值的可等待）
@@ -133,35 +136,32 @@ if (fsm.CanFire(GameFlowTrigger.ForcePlay))
 
 Busy 时 Ignore；Enter 故障 GoTo `Idle`。`CanAcceptGameplayInput` 同时要求启动态 Playing、对局 Idle，且 App 未暂停。
 
-## 资源管理（对齐 YooAsset）
+## 资源管理（异步运行时）
 
-API 对齐官方 [YooAsset](https://www.yooasset.com/docs/guide-runtime/ResourceLoad)：`GameAssets` ≈ `YooAssets`，`ResourcePackage` / `AssetHandle` / `SceneHandle` / `EPlayMode`。
+门面 `GameAssets`（Facade）对齐 [YooAsset](https://www.yooasset.com/docs/guide-runtime/ResourceLoad) 调用习惯；实现按 Strategy / Factory / Template Method / Observer / Builder 分层。
 
 ```csharp
 await GameAssets.EnsureInitializedAsync("DefaultPackage");
+await GameAssets.PreloadFirstPackageAsync();
 var handle = GameAssets.LoadAssetAsync<GameTuning>("GameTuning");
 await handle;
 var tuning = handle.GetAssetObject<GameTuning>();
 handle.Release();
 
-await GameAssets.LoadSceneAsync("Main"); // location，不是随意路径
+await GameAssets.LoadSceneAsync("Main");
 ```
 
-- **Location**：可寻址名（`GameTuning`、`Main`），也支持 `Assets/Res/...` 完整路径
-- **只加载 `Assets/Res`**：资源对象必须落在该目录；目录外路径会被拒绝
-- **地址表**：`Assets/Res/AddressCatalog.asset`
-- **PlayMode**：`EditorSimulateMode` / `OfflinePlayMode`；`HostPlayMode` 需接入官方 YooAsset 插件，否则回退 Offline
-- Boot 场景先 `EnsureInitializedAsync`，再按 location 加载 `Main`（场景仍走 Build Settings）
+编辑器菜单：`Resource Settings` / `Rebuild Address Catalog` / `Collect First Package` / `Build AssetBundles`（`AssetBundleBuild[]` 分组打包，首包进 StreamingAssets）。
 
-接入官方插件后：保留 location 与调用面，把 `ResourcePackage` 后端换成 `YooAsset.ResourcePackage` 即可。
+PlayMode：`EditorSimulateMode`（AssetDatabase）、`OfflinePlayMode`（本地 AB）、`HostPlayMode`（version.json + 远端下载，多平台 `IBundleFileSystem`）。只加载 `Assets/Res`；公共 API 仅异步。Boot：初始化 →（Host）更新 → 首包预载 → 加载 Main。打 Android APK 前自动 Build AssetBundles。
 
 ## App 服务层
 
-Booting 时 `GameServices.Ensure` 挂到根物体，经 `GameBuildContext` 分发给 Manager / Coin / UI：
+Booting 时 `GameServices.EnsureAsync` 挂到根物体，经 `GameBuildContext` 分发：
 
 | 服务 | 职责 |
 |------|------|
-| `GameTuning` | Splash/淡出/抛币手感/奖励文案/SFX 槽；从 `Assets/Res` 按 location 加载，失败则运行时默认 |
+| `GameTuning` | Splash/淡出/抛币手感/奖励文案/SFX；`ResolveOrDefaultAsync` 异步加载 |
 | `GameSettings` | `Muted`、`HapticsEnabled`（预留）独立 PlayerPrefs |
 | `AudioService` | `PlayToss` / `PlayLand` / `PlayUiClick`；静音或空 clip 时 no-op |
 | `AppLifecycle` | `OnApplicationPause` / `Focus` → `IsPaused`；**不**改 `timeScale`，不取消飞行中抛币 |

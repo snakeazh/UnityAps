@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace CoinFlip.Assets
 {
-    /// <summary>Package init operation, aligned with YooAsset <c>InitializationOperation</c>.</summary>
+    /// <summary>Package init / update operation (Observer + awaitable).</summary>
     public sealed class InitializationOperation : CustomYieldInstruction
     {
         Action<InitializationOperation> _completed;
@@ -12,6 +12,7 @@ namespace CoinFlip.Assets
         public bool IsDone { get; private set; }
         public bool StatusIsSucceed { get; private set; } = true;
         public string Error { get; private set; } = string.Empty;
+        public float Progress { get; private set; }
         public override bool keepWaiting => !IsDone;
 
         public event Action<InitializationOperation> Completed
@@ -27,6 +28,8 @@ namespace CoinFlip.Assets
             remove => _completed -= value;
         }
 
+        internal void SetProgress(float value) => Progress = Mathf.Clamp01(value);
+
         internal void Complete(bool success, string error = null)
         {
             if (IsDone)
@@ -36,6 +39,7 @@ namespace CoinFlip.Assets
 
             StatusIsSucceed = success;
             Error = error ?? string.Empty;
+            Progress = success ? 1f : Progress;
             IsDone = true;
             _completed?.Invoke(this);
         }
