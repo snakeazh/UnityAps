@@ -50,6 +50,28 @@ namespace CoinFlip.EditorTools
                 .CopyFirstPackageToStreaming(target);
         }
 
+        [MenuItem("CoinFlip/Build Resource Version Only", priority = 24)]
+        public static void BuildResourceVersionOnly()
+        {
+            var settings = LoadOrCreateSettings();
+            var autoBump = EditorPrefs.GetBool("CoinFlip.ResourceVersion.AutoBump", true);
+            var bump = (EVersionBump)EditorPrefs.GetInt("CoinFlip.ResourceVersion.Bump", (int)EVersionBump.Patch);
+            var custom = EditorPrefs.GetString("CoinFlip.ResourceVersion.CustomVersion", string.Empty);
+            var next = !string.IsNullOrWhiteSpace(custom)
+                ? custom.Trim()
+                : (autoBump ? VersionBumpUtility.Bump(settings.packageVersion, bump) : settings.packageVersion);
+            settings.packageVersion = next;
+            EditorUtility.SetDirty(settings);
+            AssetDatabase.SaveAssets();
+
+            var target = EditorUserBuildSettings.activeBuildTarget;
+            var exportRoot = EditorPrefs.GetString("CoinFlip.ResourceVersion.ExportRoot", "Publish/ResourceVersions");
+            var copyStreaming = EditorPrefs.GetBool("CoinFlip.ResourceVersion.CopyStreaming", true);
+            new AssetBundleBuildPipeline(settings)
+                .PublishVersionOnly(target, copyStreaming, exportRoot);
+            Debug.Log($"[Resource] Version-only publish complete: v{settings.packageVersion}");
+        }
+
         public static ResourceSettings LoadOrCreateSettings()
         {
             EnsureResFolder();

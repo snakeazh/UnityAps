@@ -395,34 +395,141 @@ namespace CoinFlip.EditorTools
         void WriteVersionManifest(string output, BuildTarget target)
         {
             var manifest = new VersionManifest { version = _settings.packageVersion };
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var kv in _bundleToAssets)
             {
-                var file = Path.Combine(output, kv.Key);
-                long size = 0;
-                string hash = string.Empty;
-                if (File.Exists(file))
-                {
-                    var bytes = File.ReadAllBytes(file);
-                    size = bytes.LongLength;
-                    using (var md5 = MD5.Create())
-                    {
-                        hash = BitConverter.ToString(md5.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
-                    }
-                }
+                AddBundleInfo(manifest, output, kv.Key, seen);
+            }
 
-                var tags = _bundleTags.TryGetValue(kv.Key, out var set)
-                    ? string.Join(";", set)
-                    : string.Empty;
-                manifest.bundles.Add(new VersionBundleInfo
+            // Include already-built bundles on disk (version-only publish / leftovers).
+            if (Directory.Exists(output))
+            {
+                foreach (var file in Directory.GetFiles(output, "*.bundle", SearchOption.TopDirectoryOnly))
                 {
-                    name = kv.Key,
-                    hash = hash,
-                    size = size,
-                    tags = tags
-                });
+                    AddBundleInfo(manifest, output, Path.GetFileName(file), seen);
+                }
+            }
+
+            for (var i = 0; i < _rawFiles.Count; i++)
+            {
+                AddBundleInfo(manifest, output, _rawFiles[i].outputName, seen);
             }
 
             File.WriteAllText(Path.Combine(output, "version.json"), manifest.ToJson(true), Encoding.UTF8);
+        }
+
+        void AddBundleInfo(VersionManifest manifest, string output, string fileName, HashSet<string> seen)
+        {
+            if (string.IsNullOrEmpty(fileName) || !seen.Add(fileName))
+            {
+                return;
+            }
+
+            var file = Path.Combine(output, fileName);
+            long size = 0;
+            string hash = string.Empty;
+            if (File.Exists(file))
+            {
+                var bytes = File.ReadAllBytes(file);
+                size = bytes.LongLength;
+                using (var md5 = MD5.Create())
+                {
+                    hash = BitConverter.ToString(md5.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
+                }
+            }
+
+            var tags = _bundleTags.TryGetValue(fileName, out var set)
+                ? string.Join(";", set)
+                : string.Empty;
+            manifest.bundles.Add(new VersionBundleInfo
+            {
+                name = fileName,
+                hash = hash,
+                size = size,
+                tags = tags
+            });
+        }
+
+        /// <summary>
+        /// Rebuild version.json + bootstrap from existing bundle output (no AssetBundle rebuild).
+        /// </summary>
+        public AssetBundleBuildPipeline PublishVersionOnly(
+            BuildTarget target,
+            bool copyToStreaming,
+            string exportRoot = null)
+        {
+            CollectAndAssign();
+            WriteCatalog();
+            WriteFirstPackageManifest();
+
+            var output = Path.Combine(_settings.bundleOutputRoot, target.ToString()).Replace("\\", "/");
+            Directory.CreateDirectory(output);
+            WriteVersionManifest(output, target);
+            WriteBootstrap(output);
+
+            if (copyToStreaming)
+            {
+                var streaming = _settings.streamingBundleRoot.Replace("\\", "/");
+                EnsureFolder(streaming);
+                var verSrc = Path.Combine(output, "version.json");
+                if (File.Exists(verSrc))
+                {
+                    File.Copy(verSrc, Path.Combine(streaming, "version.json"), true);
+                }
+
+                var bootSrc = Path.Combine(output, BootstrapManifest.FileName);
+                if (File.Exists(bootSrc))
+                {
+                    File.Copy(bootSrc, Path.Combine(streaming, BootstrapManifest.FileName), true);
+                }
+
+                AssetDatabase.Refresh();
+            }
+
+            if (!string.IsNullOrWhiteSpace(exportRoot))
+            {
+                ExportVersionPackage(output, exportRoot.Trim());
+            }
+
+            Debug.Log(
+                $"[AssetBundleBuild] Version-only publish → {output} v{_settings.packageVersion}" +
+                (string.IsNullOrWhiteSpace(exportRoot) ? string.Empty : $" export={exportRoot}"));
+            return this;
+        }
+
+        public static void ExportVersionPackage(string outputDir, string exportRoot)
+        {
+            var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            var dest = Path.Combine(exportRoot, stamp).Replace("\\", "/");
+            Directory.CreateDirectory(dest);
+
+            foreach (var name in new[] { "version.json", BootstrapManifest.FileName })
+            {
+                var src = Path.Combine(outputDir, name);
+                if (File.Exists(src))
+                {
+                    File.Copy(src, Path.Combine(dest, name), true);
+                }
+            }
+
+            // Optional: copy all bundles for CDN drop.
+            if (Directory.Exists(outputDir))
+            {
+                foreach (var file in Directory.GetFiles(outputDir))
+                {
+                    var fileName = Path.GetFileName(file);
+                    if (string.Equals(fileName, "version.json", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(fileName, BootstrapManifest.FileName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    File.Copy(file, Path.Combine(dest, fileName), true);
+                }
+            }
+
+            Debug.Log($"[AssetBundleBuild] Exported publish package → {dest}");
         }
 
         static HashSet<string> MergeTags(

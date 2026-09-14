@@ -9,7 +9,7 @@ namespace CoinFlip.EditorTools
     /// <summary>Editor-side smoke checks for the asset runtime (no Play Mode required).</summary>
     public static class ResourceRuntimeValidator
     {
-        [MenuItem("CoinFlip/Validate Resource Runtime", priority = 24)]
+        [MenuItem("CoinFlip/Validate Resource Runtime", priority = 26)]
         public static void Validate()
         {
             var settings = ResourceEditorMenu.LoadOrCreateSettings();

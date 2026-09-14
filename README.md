@@ -151,7 +151,7 @@ handle.Release();
 await GameAssets.LoadSceneAsync("Main");
 ```
 
-编辑器菜单：`Resource Settings` / `Rebuild Address Catalog` / `Collect First Package` / `Build AssetBundles`（`AssetBundleBuild[]` 分组打包，首包进 StreamingAssets）。
+编辑器菜单：`Resource Settings` / `Rebuild Address Catalog` / `Collect First Package` / `Build AssetBundles`（`AssetBundleBuild[]` 分组打包，首包进 StreamingAssets）/ `Build Resource Version Only`（只发 version）/ `Resource Version Publish Panel`（独立版本面板，支持自动 bump）。
 
 PlayMode：`EditorSimulateMode`（AssetDatabase）、`OfflinePlayMode`（本地 AB）、`HostPlayMode`（version.json + 远端下载，多平台 `IBundleFileSystem`）。只加载 `Assets/Res`；公共 API 仅异步。Boot：初始化 →（Host）更新 → 首包预载 → 加载 Main。打 Android APK 前自动 Build AssetBundles。Player 侧通过 `StreamingAssets/Bundles/bootstrap.json` 恢复地址表与配置（无需 Resources）。
 
